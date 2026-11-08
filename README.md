@@ -32,9 +32,26 @@ terminal AI agent sessions - <b>Claude Code</b>, <b>Codex</b>, <b>Gemini CLI</b>
 
 ## Install
 
-Download an archive from [Releases](https://github.com/sergqwer/chs/releases), unpack it anywhere and run
-`chs` once - by its full path. That first run puts it on your PATH (see below); from then on `chs` works
-from any terminal.
+One line, as the user who will run it (no admin rights needed). Run it again to update.
+
+Linux / macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sergqwer/chs/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/sergqwer/chs/main/install.ps1 | iex
+```
+
+The scripts download the latest release into `~/.local/bin` or `%LOCALAPPDATA%\Programs\chs` and run it
+once (see below). `CHS_VERSION=v0.2.1` pins a release, `CHS_INSTALL_DIR` picks another folder.
+
+Or by hand: download an archive from [Releases](https://github.com/sergqwer/chs/releases), unpack it
+anywhere and run `chs` once - by its full path. That first run puts it on your PATH (see below); from then
+on `chs` works from any terminal.
 
 Or build it (Rust 1.85+):
 
