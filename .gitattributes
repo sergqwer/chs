@@ -1,0 +1,3 @@
+# Keep LF everywhere: config.default.toml is embedded in the binary, and a CRLF
+# checkout (the Windows CI runner) would change what gets built.
+* text=auto eol=lf

@@ -1,6 +1,6 @@
 [package]
 name = "chs"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.85"
 description = "Browse, fuzzy-search and resume your recent terminal AI agent sessions (Claude Code, Codex, Gemini, Copilot, Cursor, OpenCode, Pi, Kimi, dsh, Aider and more)"

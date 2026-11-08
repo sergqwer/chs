@@ -453,7 +453,13 @@ pub fn load() -> Result<(Config, bool)> {
         write_default(&path, false)?;
         created = true;
     }
-    let text = std::fs::read_to_string(&path).with_context(|| format!("can not read {}", path.display()))?;
+    let mut text = std::fs::read_to_string(&path).with_context(|| format!("can not read {}", path.display()))?;
+    // 0.2.0 and 0.2.1 for Windows wrote every line ending of the default config as
+    // "\r\r\n", which TOML rejects; mend such a file once.
+    if text.contains("\r\r\n") {
+        text = text.replace("\r\r\n", "\r\n");
+        let _ = std::fs::write(&path, &text);
+    }
     let cfg = Config::from_user_str(&text).with_context(|| format!("in {}", path.display()))?;
     Ok((cfg, created))
 }
@@ -465,9 +471,16 @@ pub fn write_default(path: &Path, force: bool) -> Result<bool> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("can not create {}", dir.display()))?;
     }
-    let text = if cfg!(windows) { DEFAULT_CONFIG.replace('\n', "\r\n") } else { DEFAULT_CONFIG.to_string() };
-    std::fs::write(path, text).with_context(|| format!("can not write {}", path.display()))?;
+    let nl = if cfg!(windows) { "\r\n" } else { "\n" };
+    std::fs::write(path, with_newlines(DEFAULT_CONFIG, nl))
+        .with_context(|| format!("can not write {}", path.display()))?;
     Ok(true)
+}
+
+/// `text` with every line ending made `nl`, whatever it was: the embedded default
+/// has CRLF when the source was checked out on Windows.
+fn with_newlines(text: &str, nl: &str) -> String {
+    text.lines().flat_map(|l| [l, nl]).collect()
 }
 
 /// Set `key = true|false` inside `[section]` of a config text, keeping every comment
@@ -595,6 +608,17 @@ mod tests {
         assert_eq!(c.general.result_count, 20);
         assert!(!c.display.preview);
         assert_eq!(c.display.date_format, "%Y-%m-%d %H:%M");
+    }
+
+    #[test]
+    fn default_config_gets_one_kind_of_newline() {
+        assert_eq!(with_newlines("a\r\nb\n\nc", "\r\n"), "a\r\nb\r\n\r\nc\r\n");
+        // The embedded text as a Windows checkout has it, then as written there.
+        let checkout = with_newlines(DEFAULT_CONFIG, "\r\n");
+        let written = with_newlines(&checkout, "\r\n");
+        assert!(!written.contains("\r\r"));
+        Config::from_user_str(&written).unwrap();
+        assert_eq!(with_newlines(&checkout, "\n"), with_newlines(DEFAULT_CONFIG, "\n"));
     }
 
     #[test]
