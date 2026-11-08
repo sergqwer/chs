@@ -7,17 +7,7 @@ terminal AI agent sessions - <b>Claude Code</b>, <b>Codex</b>, <b>Gemini CLI</b>
 <b>OpenCode</b>, <b>Pi</b>, <b>Qwen Code</b>, <b>Kimi</b>, <b>DeepSeek Harness</b>, <b>Aider</b> and
 <a href="#supported-tools">17 more</a> - from one list.</p>
 
-```
-❯ rust parser                                                    6/49  all
-╭───────────────────────────────────────────────────╮╭ preview ───────────────────────╮
-│▶ claude    2026-11-08 02:52 log-parser  Rewrite t… ││claude                          │
-│  claude    2026-11-08 03:05 api-server  Fix the r… ││Rewrite the log parser in Rust  │
-│  claudellm 2026-09-24 01:40 web-shop    Find bugs… ││folder: /home/me/log-parser     │
-│  codex     2026-09-21 11:02 dotfiles    Review th… ││first prompts                   │
-│                                                    ││› the parser chokes on CRLF …   │
-╰───────────────────────────────────────────────────╯╰────────────────────────────────╯
-↑↓ select · Enter resume · Tab source · Ctrl+T preview · Ctrl+A headless · Esc quit
-```
+<p align="center"><img src="assets/chs-list.png" alt="chs listing recent sessions of fifteen AI coding agents, each in its own color, with a preview of the selected one"></p>
 
 - **One list for every agent.** [28 tools](#supported-tools) out of the box, found wherever they keep their
   history - plus any extra Claude Code / Codex home (claudellm, work/personal profiles…). Each source has
@@ -33,6 +23,17 @@ terminal AI agent sessions - <b>Claude Code</b>, <b>Codex</b>, <b>Gemini CLI</b>
   and on Linux/macOS chs *replaces itself* with the resumed session, so it holds no memory while you work.
 - **Windows tray** (optional), PATH registration and autostart, all switchable in the config.
 - **Everything is configurable**: columns, colors, keys, sources, resume commands, search weights, UI language.
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/chs-search.png" alt="Searching for tests: a Codex session matches by its title, a Claude Code session by a prompt"></td>
+    <td width="50%"><img src="assets/chs-missing-folder.png" alt="A session whose folder was deleted, marked with a red cross; the preview says resuming makes the folder again"></td>
+  </tr>
+  <tr>
+    <td>Type to search: titles, folders and prompts, with the prompt that matched in the preview.</td>
+    <td>A deleted project folder is marked; resuming makes it again at the same path.</td>
+  </tr>
+</table>
 
 ## Install
 
