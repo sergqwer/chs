@@ -35,6 +35,7 @@ pub struct General {
     pub after_resume: AfterResume,
     pub missing_cwd: MissingCwd,
     pub esc_clears_query: bool,
+    pub builtin_sources: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -217,11 +218,39 @@ pub enum TrayClick {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
+    /// Claude Code; also Qoder, iFlow and Kode, which write the same transcripts.
     Claude,
     Codex,
+    /// OpenCode's database.
     Opencode,
+    /// Kilo Code CLI: OpenCode's schema in `kilo.db`.
+    Kilo,
     Crush,
     Goose,
+    Pi,
+    Copilot,
+    Droid,
+    Cursor,
+    Cline,
+    Openhands,
+    Continue,
+    Auggie,
+    Amazonq,
+    Aider,
+    Gemini,
+    Qwen,
+    /// Kimi Code (`~/.kimi-code`).
+    Kimi,
+    /// The archived Python Kimi CLI (`~/.kimi`).
+    #[serde(rename = "kimi-cli")]
+    KimiCli,
+    Vibe,
+    Codebuddy,
+    /// DeepSeek Harness.
+    Dsh,
+    Hermes,
+    /// Google Antigravity CLI (`agy`).
+    Antigravity,
 }
 
 /// One folder or several candidates; every one that exists is read. Candidates
@@ -270,13 +299,20 @@ impl SourceConfig {
             Format::Claude => vec!["sdk-cli".into(), "sdk-ts".into(), "sdk-py".into()],
             // `exec` is `codex exec`; `subagent` is what a JSON-object source maps to.
             Format::Codex => vec!["exec".into(), "subagent".into(), "mcp".into()],
-            // Child sessions spawned by a task/subagent tool.
-            Format::Opencode | Format::Crush => vec!["subagent".into()],
             // Goose's session_type: only "user" (and the "terminal" integration) is a
             // conversation you had; the rest is scheduled, spawned or other clients.
             Format::Goose => {
                 vec!["scheduled".into(), "sub_agent".into(), "hidden".into(), "gateway".into(), "acp".into()]
             }
+            // `droid exec`, automations, `/btw` side chats.
+            Format::Droid => vec!["exec".into(), "automation".into(), "btw".into(), "subagent".into()],
+            Format::Cline => vec!["subagent".into(), "noninteractive".into()],
+            // Hermes' session source: one-shot runs, cron jobs and spawned agents.
+            Format::Hermes => vec!["oneshot".into(), "cron".into(), "subagent".into()],
+            // Conversations of the desktop app, listed in the CLI's index too.
+            Format::Antigravity => vec!["subagent".into(), "app".into()],
+            // Child sessions spawned by a task/subagent tool; the rest mark nothing.
+            _ => vec!["subagent".into()],
         }
     }
 
@@ -303,8 +339,16 @@ impl Config {
     /// Parse a user config, deep-merged over the embedded defaults.
     pub fn from_user_str(user: &str) -> Result<Config> {
         let mut base: toml::Table = toml::from_str(DEFAULT_CONFIG).expect("embedded default config");
-        let over: toml::Table = toml::from_str(user).context("config is not valid TOML")?;
+        let mut over: toml::Table = toml::from_str(user).context("config is not valid TOML")?;
+        let user_sources = match over.remove("sources") {
+            None => Vec::new(),
+            Some(toml::Value::Array(list)) => list,
+            Some(_) => bail!("`sources` must be an array of [[sources]] tables"),
+        };
         merge(&mut base, over);
+        let keep_builtin =
+            base.get("general").and_then(|g| g.get("builtin_sources")).and_then(toml::Value::as_bool).unwrap_or(true);
+        merge_sources(&mut base, user_sources, keep_builtin);
         let cfg: Config = toml::Value::Table(base).try_into().context("config has an invalid value")?;
         cfg.validate()?;
         Ok(cfg)
@@ -351,6 +395,29 @@ fn merge(base: &mut toml::Table, over: toml::Table) {
             }
         }
     }
+}
+
+/// A user's `[[sources]]` entry updates the built-in one of the same name, field by
+/// field; an entry with a new name is added after them. Without `keep_builtin` the
+/// user's list replaces the built-in one.
+fn merge_sources(base: &mut toml::Table, user: Vec<toml::Value>, keep_builtin: bool) {
+    let mut list = match base.remove("sources") {
+        Some(toml::Value::Array(a)) if keep_builtin => a,
+        _ => Vec::new(),
+    };
+    for entry in user {
+        let name = entry.get("name").and_then(toml::Value::as_str).map(str::to_string);
+        let same = name.and_then(|n| list.iter().position(|b| b.get("name").and_then(toml::Value::as_str) == Some(&n)));
+        match (same, entry) {
+            (Some(i), toml::Value::Table(over)) => {
+                if let toml::Value::Table(b) = &mut list[i] {
+                    merge(b, over);
+                }
+            }
+            (_, entry) => list.push(entry),
+        }
+    }
+    base.insert("sources".into(), toml::Value::Array(list));
 }
 
 /// `CHS_CONFIG` overrides; otherwise `~/.config/chs/config.toml` (Linux),
@@ -523,14 +590,45 @@ mod tests {
     }
 
     #[test]
-    fn sources_replace_wholesale() {
+    fn sources_merge_by_name() {
+        let builtin = Config::default_config().sources.len();
         let c = Config::from_user_str(
-            "[[sources]]\nname='x'\nformat='codex'\npath='/x'\nresume_command=['codex','resume','{id}']\n",
+            "[[sources]]\nname='gemini'\nenabled=false\n\
+             [[sources]]\nname='x'\nformat='codex'\npath='/x'\nresume_command=['codex','resume','{id}']\n",
+        )
+        .unwrap();
+        assert_eq!(c.sources.len(), builtin + 1, "a new name is added");
+        let g = c.source("gemini").unwrap();
+        assert!(!g.enabled);
+        assert_eq!(g.resume_command, vec!["gemini", "--resume", "{id}"], "other fields keep their defaults");
+        let x = c.sources.last().unwrap();
+        assert_eq!((x.name.as_str(), x.enabled), ("x", true));
+        assert_eq!(x.headless_markers(), vec!["exec", "subagent", "mcp"]);
+    }
+
+    #[test]
+    fn builtin_sources_off_uses_only_mine() {
+        let c = Config::from_user_str(
+            "[general]\nbuiltin_sources=false\n\
+             [[sources]]\nname='x'\nformat='codex'\npath='/x'\nresume_command=['codex','resume','{id}']\n",
         )
         .unwrap();
         assert_eq!(c.sources.len(), 1);
-        assert!(c.sources[0].enabled);
-        assert_eq!(c.sources[0].headless_markers(), vec!["exec", "subagent", "mcp"]);
+        let none = Config::from_user_str("[general]\nbuiltin_sources=false\n").unwrap();
+        assert!(none.sources.is_empty(), "no sources of mine means none at all");
+        // A partial entry with no built-in to fill it in is an error, not a silent default.
+        assert!(Config::from_user_str("[general]\nbuiltin_sources=false\n[[sources]]\nname='gemini'\n").is_err());
+    }
+
+    #[test]
+    fn every_builtin_source_is_well_formed() {
+        let c = Config::default_config();
+        let mut names = std::collections::HashSet::new();
+        for s in &c.sources {
+            assert!(names.insert(s.name.as_str()), "duplicate {}", s.name);
+            assert!(s.name.chars().count() <= 9, "{} is wider than source_width", s.name);
+            assert!(s.color.starts_with('#') && s.color.len() == 7, "{}: color {}", s.name, s.color);
+        }
     }
 
     #[test]

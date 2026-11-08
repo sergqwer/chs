@@ -1,17 +1,41 @@
 //! Session formats. Each tool stores its history one of two ways:
 //!
-//! * **one file per session** (`Storage::Files`) - parsed by the cached, incremental
-//!   index in `index.rs`; `append_only` formats (JSONL) are read on from where the
-//!   previous run stopped, whole-file JSON is re-read when it changes;
+//! * **files** (`Storage::Files`) - parsed by the cached index in `index.rs`. A
+//!   session is one main file plus, for some tools, companion files whose changes also
+//!   invalidate the cache entry. Append-only formats (JSONL, aider's markdown) are read
+//!   on from where the previous run stopped; the rest are parsed whole when they change;
 //! * **one database for all sessions** (`Storage::Database`) - queried directly on
 //!   every start (SQLite is fast at "newest N rows", no cache needed).
+//!
+//! Several tools share a format: Qoder, iFlow and Kode write Claude Code's transcript
+//! layout, Kilo Code keeps OpenCode's database, so they are configured as sources of
+//! those formats with their own folders.
 
+pub mod aider;
+pub mod amazonq;
+pub mod antigravity;
+pub mod auggie;
 pub mod claude;
+pub mod cline;
+pub mod codebuddy;
 pub mod codex;
+pub mod common;
+pub mod continue_cli;
+pub mod copilot;
 pub mod crush;
+pub mod cursor;
+pub mod droid;
+pub mod dsh;
+pub mod gemini;
 pub mod goose;
+pub mod hermes;
+pub mod kimi;
 pub mod opencode;
+pub mod openhands;
+pub mod pi;
+pub mod qwen;
 mod sqlite;
+pub mod vibe;
 
 use crate::config::Format;
 use crate::session::{Limits, Session};
@@ -20,30 +44,105 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Storage {
-    Files { append_only: bool },
+    Files,
     Database,
 }
 
 pub fn storage(format: Format) -> Storage {
+    use Format::*;
     match format {
-        Format::Claude | Format::Codex => Storage::Files { append_only: true },
-        Format::Opencode | Format::Crush | Format::Goose => Storage::Database,
+        Opencode | Kilo | Crush | Goose | Amazonq | Hermes | Antigravity => Storage::Database,
+        _ => Storage::Files,
     }
 }
 
+/// Whether the file is only ever appended to, so a later run may continue reading
+/// where this one stopped (`parse`) instead of reading it whole (`parse_file`).
+pub fn incremental(format: Format, path: &Path) -> bool {
+    use Format::*;
+    match format {
+        Claude | Codex | Pi | Copilot | Qwen | Codebuddy | Aider => true,
+        Gemini => gemini::incremental(path),
+        Dsh => dsh::incremental(path),
+        _ => false,
+    }
+}
+
+/// The main file of every session below `root`.
 pub fn list_files(format: Format, root: &Path) -> Vec<PathBuf> {
+    use Format::*;
     match format {
-        Format::Claude => claude::list_files(root),
-        Format::Codex => codex::list_files(root),
-        Format::Opencode | Format::Crush | Format::Goose => Vec::new(),
+        Claude => claude::list_files(root),
+        Codex => codex::list_files(root),
+        Pi => pi::list_files(root),
+        Copilot => copilot::list_files(root),
+        Droid => droid::list_files(root),
+        Cursor => cursor::list_files(root),
+        Cline => cline::list_files(root),
+        Openhands => openhands::list_files(root),
+        Continue => continue_cli::list_files(root),
+        Auggie => auggie::list_files(root),
+        Aider => aider::list_files(root),
+        Gemini => gemini::list_files(root),
+        Qwen => qwen::list_files(root),
+        Kimi => kimi::list_files(root),
+        KimiCli => kimi::legacy_list_files(root),
+        Vibe => vibe::list_files(root),
+        Codebuddy => codebuddy::list_files(root),
+        Dsh => dsh::list_files(root),
+        Opencode | Kilo | Crush | Goose | Amazonq | Hermes | Antigravity => Vec::new(),
     }
 }
 
-pub fn parse(format: Format, reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
+/// Other files a whole-file session is read from: their size and mtime count towards
+/// the cache fingerprint (missing ones are simply skipped).
+pub fn companions(format: Format, path: &Path) -> Vec<PathBuf> {
+    use Format::*;
     match format {
-        Format::Claude => claude::parse(reader, s, lim),
-        Format::Codex => codex::parse(reader, s, lim),
-        Format::Opencode | Format::Crush | Format::Goose => Ok(0),
+        Cursor => cursor::companions(path),
+        Cline => cline::companions(path),
+        Openhands => openhands::companions(path),
+        Kimi => kimi::companions(path),
+        KimiCli => kimi::legacy_companions(path),
+        Vibe => vibe::companions(path),
+        _ => Vec::new(),
+    }
+}
+
+/// Continue an incremental parse; returns the bytes consumed.
+pub fn parse(format: Format, reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
+    use Format::*;
+    match format {
+        Claude => claude::parse(reader, s, lim),
+        Codex => codex::parse(reader, s, lim),
+        Pi => pi::parse(reader, s, lim),
+        Copilot => copilot::parse(reader, s, lim),
+        Droid => droid::parse(reader, s, lim),
+        Qwen => qwen::parse(reader, s, lim),
+        Codebuddy => codebuddy::parse(reader, s, lim),
+        Aider => aider::parse(reader, s, lim),
+        Gemini => gemini::parse(reader, s, lim),
+        Dsh => dsh::parse(reader, s, lim),
+        _ => Ok(0),
+    }
+}
+
+/// Read a whole-file session (and its companions) from scratch.
+pub fn parse_file(format: Format, path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result<()> {
+    use Format::*;
+    match format {
+        Cursor => cursor::parse_file(path, s, lim),
+        Cline => cline::parse_file(path, s, lim),
+        Openhands => openhands::parse_file(path, s, lim),
+        Continue => continue_cli::parse_file(path, s, lim),
+        Auggie => auggie::parse_file(path, s, lim),
+        Gemini => gemini::parse_file(path, s, lim),
+        Kimi => kimi::parse_file(path, s, lim),
+        KimiCli => kimi::legacy_parse_file(path, s, lim),
+        Vibe => vibe::parse_file(path, s, lim),
+        Dsh => dsh::parse_file(path, s, lim),
+        Droid => droid::parse_file(path, s, lim),
+        _ => Ok(()),
     }
 }
 
@@ -51,31 +150,40 @@ pub fn parse(format: Format, reader: impl BufRead, s: &mut Session, lim: &Limits
 pub fn load_database(format: Format, root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
     match format {
         Format::Opencode => opencode::load(root, lim, limit),
+        Format::Kilo => opencode::load_named(root, "kilo.db", lim, limit),
         Format::Crush => crush::load(root, lim, limit),
         Format::Goose => goose::load(root, lim, limit),
-        Format::Claude | Format::Codex => Vec::new(),
+        Format::Amazonq => amazonq::load(root, lim, limit),
+        Format::Hermes => hermes::load(root, lim, limit),
+        Format::Antigravity => antigravity::load(root, lim, limit),
+        _ => Vec::new(),
     }
 }
 
-/// Turn the raw (cached) parse state into what is displayed and searched.
+/// Turn the raw (cached) parse state into what is displayed and searched. Runs on
+/// every load, so it must stay cheap.
 pub fn finish(format: Format, s: &mut Session, lim: &Limits) {
-    if format == Format::Codex {
-        codex::finish(s, lim);
+    match format {
+        Format::Codex => codex::finish(s, lim),
+        Format::Droid => droid::finish(s),
+        Format::Gemini => gemini::finish(s),
+        Format::Aider => aider::finish(s),
+        _ => {}
     }
     if s.id.is_empty() {
-        if let Some(stem) = s.file.file_stem().and_then(|x| x.to_str()) {
-            s.id = id_from_file_stem(format, stem);
-        }
+        s.id = id_from_path(format, &s.file);
     }
 }
 
-/// Fallback when a file never states its session id.
-fn id_from_file_stem(format: Format, stem: &str) -> String {
+/// Fallback when a file never states its session id; empty where the name is not one.
+fn id_from_path(format: Format, path: &Path) -> String {
+    use Format::*;
+    let stem = path.file_stem().and_then(|x| x.to_str()).unwrap_or_default();
     match format {
         // <id>.jsonl
-        Format::Claude => stem.to_string(),
+        Claude | Droid | Qwen | Codebuddy => stem.to_string(),
         // rollout-<timestamp>-<uuid>: the uuid is the last 5 dash-separated groups.
-        Format::Codex => {
+        Codex => {
             let parts: Vec<&str> = stem.split('-').collect();
             if parts.len() >= 5 {
                 parts[parts.len() - 5..].join("-")
@@ -83,6 +191,30 @@ fn id_from_file_stem(format: Format, stem: &str) -> String {
                 String::new()
             }
         }
-        Format::Opencode | Format::Crush | Format::Goose => String::new(),
+        // <timestamp>_<uuid>.jsonl
+        Pi => stem.rsplit_once('_').map(|(_, id)| id.to_string()).unwrap_or_default(),
+        // session-state/<uuid>/events.jsonl
+        Copilot => path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or_default().to_string(),
+        _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_from_file_names() {
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(
+            id_from_path(
+                Format::Codex,
+                &p("/x/rollout-2026-11-08T10-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl")
+            ),
+            "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+        );
+        assert_eq!(id_from_path(Format::Pi, &p("/x/2026-11-08T10-00-00-000Z_0b6f-11.jsonl")), "0b6f-11");
+        assert_eq!(id_from_path(Format::Copilot, &p("/x/session-state/7f3c/events.jsonl")), "7f3c");
+        assert_eq!(id_from_path(Format::Gemini, &p("/x/session-2026-11-08T10-00-3f2a1b2c.jsonl")), "");
     }
 }

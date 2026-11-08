@@ -36,6 +36,9 @@ after_resume = "exit"
 missing_cwd = "home"
 # Esc first clears the search; a second Esc quits. false = Esc always quits.
 esc_clears_query = true
+# true: your [[sources]] are merged into the built-in list by name (see the end of
+# this file). false: only the [[sources]] written in your config are used.
+builtin_sources = true
 
 [display]
 # Columns in the list, left to right. Available: "source", "date", "folder", "title".
@@ -178,19 +181,26 @@ tray_left_click = "open"
 editor = "notepad.exe"
 
 # ---------------------------------------------------------------------------------
-# Session sources. Listed in this order in the source filter (Tab).
-# A source whose folder does not exist is skipped silently.
+# Session sources, in the order the source filter (Tab) cycles through them; Tab
+# skips sources that have no sessions. A source whose folders do not exist costs
+# nothing and is skipped silently.
+#
+# Your own [[sources]] entries are merged into these by `name`: write only what you
+# change (`name = "gemini"` plus `enabled = false` turns one off), and an entry with a
+# new name adds a source. [general] builtin_sources = false uses only the entries in
+# your file instead.
 #
 #   name             label shown in the list (keep it short)
-#   format           which tool wrote the sessions (the list below has one source of
-#                    every supported format): "claude", "codex", "opencode", ...
-#   path             the tool's data folder, or a list of candidates (see each source)
+#   format           which tool wrote the sessions; several tools share one, e.g.
+#                    Qoder, iFlow and Kode write Claude Code's format
+#   path             the tool's data folder, or a list of candidates (every one that
+#                    exists is read)
 #   color            color of the label
 #   enabled          false = ignore this source
-#   include_headless show sessions started non-interactively (claude -p / SDK, codex exec,
-#                    subagents). Ctrl+A toggles them for one run.
-#   headless_markers values of `entrypoint` (claude) or `source` (codex) that count as
-#                    non-interactive. Leave out for the defaults.
+#   include_headless show sessions the tool marks as non-interactive or spawned
+#                    (claude -p / SDK, codex exec, subagents...). Ctrl+A toggles them.
+#   headless_markers the marker values that count as headless; leave out for the
+#                    format's defaults
 #   resume_command   program and arguments; {id} = session id, {cwd} = its folder,
 #                    {file} = the session file. Runs inside the session's folder.
 # ---------------------------------------------------------------------------------
@@ -200,8 +210,6 @@ name = "claude"
 format = "claude"
 path = "~/.claude"
 color = "#D97757"
-enabled = true
-include_headless = false
 resume_command = ["claude", "--resume", "{id}"]
 
 [[sources]]
@@ -209,8 +217,6 @@ name = "claudellm"
 format = "claude"
 path = "~/.claudellm"
 color = "#C678DD"
-enabled = true
-include_headless = false
 resume_command = ["claudellm", "--resume", "{id}"]
 
 [[sources]]
@@ -218,9 +224,31 @@ name = "codex"
 format = "codex"
 path = ["${CODEX_HOME}", "~/.codex"]
 color = "#10A37F"
-enabled = true
-include_headless = false
 resume_command = ["codex", "resume", "{id}"]
+
+# Gemini CLI: tmp/<project>/chats/session-*.jsonl (older builds: *.json).
+[[sources]]
+name = "gemini"
+format = "gemini"
+path = ["${GEMINI_CLI_HOME}/.gemini", "~/.gemini"]
+color = "#4285F4"
+resume_command = ["gemini", "--resume", "{id}"]
+
+# GitHub Copilot CLI: session-state/<id>/events.jsonl.
+[[sources]]
+name = "copilot"
+format = "copilot"
+path = ["${COPILOT_HOME}", "~/.copilot"]
+color = "#8957E5"
+resume_command = ["copilot", "--resume={id}"]
+
+# Cursor CLI: chats/*/<id>/meta.json, prompts from projects/*/agent-transcripts.
+[[sources]]
+name = "cursor"
+format = "cursor"
+path = ["${CURSOR_CONFIG_DIR}", "${XDG_CONFIG_HOME}/cursor", "~/.cursor"]
+color = "#CFCFCF"
+resume_command = ["agent", "--resume", "{id}"]
 
 # OpenCode: one SQLite database, opencode.db, in this folder (same path on Windows).
 [[sources]]
@@ -228,9 +256,15 @@ name = "opencode"
 format = "opencode"
 path = ["${XDG_DATA_HOME}/opencode", "~/.local/share/opencode"]
 color = "#E5C07B"
-enabled = true
-include_headless = false
 resume_command = ["opencode", "--session", "{id}"]
+
+# Kilo Code CLI, an OpenCode fork: kilo.db.
+[[sources]]
+name = "kilo"
+format = "kilo"
+path = ["${XDG_DATA_HOME}/kilo", "~/.local/share/kilo"]
+color = "#F8F675"
+resume_command = ["kilo", "--session", "{id}"]
 
 # Crush: a database per project (<project>/.crush/crush.db), found through the
 # projects.json in its global data folder.
@@ -239,8 +273,6 @@ name = "crush"
 format = "crush"
 path = ["${CRUSH_GLOBAL_DATA}", "${XDG_DATA_HOME}/crush", "~/.local/share/crush", "%LOCALAPPDATA%/crush"]
 color = "#FF6EC7"
-enabled = true
-include_headless = false
 resume_command = ["crush", "--session", "{id}"]
 
 # Goose: sessions/sessions.db in its data folder.
@@ -249,6 +281,162 @@ name = "goose"
 format = "goose"
 path = ["${GOOSE_PATH_ROOT}/data", "${XDG_DATA_HOME}/goose", "~/.local/share/goose", "%APPDATA%/Block/goose/data"]
 color = "#A0A0A0"
-enabled = true
-include_headless = false
 resume_command = ["goose", "session", "--resume", "--session-id", "{id}"]
+
+# Pi: sessions/--<folder>--/*.jsonl. Resumed by file, which works from anywhere.
+[[sources]]
+name = "pi"
+format = "pi"
+path = ["${PI_CODING_AGENT_DIR}", "~/.pi/agent"]
+color = "#56B6C2"
+resume_command = ["pi", "--session", "{file}"]
+
+# Factory Droid: sessions/<project>/<id>.jsonl.
+[[sources]]
+name = "droid"
+format = "droid"
+path = ["${FACTORY_HOME_OVERRIDE}/.factory", "~/.factory"]
+color = "#EF6F6C"
+resume_command = ["droid", "--resume", "{id}"]
+
+# Qwen Code: projects/<folder>/chats/<id>.jsonl.
+[[sources]]
+name = "qwen"
+format = "qwen"
+path = ["${QWEN_RUNTIME_DIR}", "${QWEN_HOME}", "~/.qwen"]
+color = "#615CED"
+resume_command = ["qwen", "--resume", "{id}"]
+
+# Kimi Code: sessions/<workspace>/<id>/state.json + agents/main/wire.jsonl.
+[[sources]]
+name = "kimi"
+format = "kimi"
+path = ["${KIMI_CODE_HOME}", "~/.kimi-code"]
+color = "#2EA8FF"
+resume_command = ["kimi", "--session", "{id}"]
+
+# The archived Python Kimi CLI (its data stays in ~/.kimi after `kimi migrate`).
+[[sources]]
+name = "kimi-cli"
+format = "kimi-cli"
+path = ["${KIMI_SHARE_DIR}", "~/.kimi"]
+color = "#1C6FB8"
+resume_command = ["kimi", "--session", "{id}"]
+
+# DeepSeek Harness: sessions/--<folder>--/<id>/session.v<N>.jsonl.zstd. dsh has no
+# interactive resume of its own: this continues the session headless, with the next
+# task read from the terminal (type it, then Ctrl+D). ["dsh", "web"] opens the web UI.
+[[sources]]
+name = "dsh"
+format = "dsh"
+path = ["${DSH_HOME}/sessions", "~/.dsh/sessions"]
+color = "#4D6BFE"
+resume_command = ["dsh", "headless", "--session-id", "{id}", "-"]
+
+# Hermes Agent: state.db (the default profile).
+[[sources]]
+name = "hermes"
+format = "hermes"
+path = ["${HERMES_HOME}", "~/.hermes", "%LOCALAPPDATA%/hermes"]
+color = "#D4A72C"
+resume_command = ["hermes", "--resume", "{id}"]
+
+# Google Antigravity CLI: conversation_summaries.db + history.jsonl.
+[[sources]]
+name = "agy"
+format = "antigravity"
+path = "~/.gemini/antigravity-cli"
+color = "#34A853"
+resume_command = ["agy", "--conversation", "{id}"]
+
+# Mistral Vibe: logs/session/unified/<id>/meta.json (3.x) and session_*/ (2.x).
+[[sources]]
+name = "vibe"
+format = "vibe"
+path = ["${VIBE_HOME}/logs/session", "~/.vibe/logs/session"]
+color = "#FA520F"
+resume_command = ["vibe", "--resume", "{id}"]
+
+# Cline CLI: data/sessions/<id>/<id>.json + <id>.messages.json.
+[[sources]]
+name = "cline"
+format = "cline"
+path = ["${CLINE_DATA_DIR}", "${CLINE_DIR}/data", "~/.cline/data"]
+color = "#9ECBFF"
+resume_command = ["cline", "--id", "{id}", "--cwd", "{cwd}"]
+
+# Continue's cn (and its IDE extensions): sessions/<id>.json. cn has no resume by id;
+# --fork continues the history in a new session.
+[[sources]]
+name = "continue"
+format = "continue"
+path = ["${CONTINUE_GLOBAL_DIR}", "~/.continue"]
+color = "#BE6FD8"
+resume_command = ["cn", "--fork", "{id}"]
+
+# Augment's auggie: sessions/<id>.json.
+[[sources]]
+name = "auggie"
+format = "auggie"
+path = "~/.augment"
+color = "#5BC0EB"
+resume_command = ["auggie", "--resume", "{id}"]
+
+# OpenHands CLI: conversations/<id>/base_state.json + events/.
+[[sources]]
+name = "openhands"
+format = "openhands"
+path = ["${OPENHANDS_CONVERSATIONS_DIR}", "${OPENHANDS_PERSISTENCE_DIR}", "~/.openhands"]
+color = "#E8C547"
+resume_command = ["openhands", "--resume", "{id}"]
+
+# Amazon Q Developer CLI: data.sqlite3, one conversation per folder.
+[[sources]]
+name = "amazon-q"
+format = "amazonq"
+path = ["${XDG_DATA_HOME}/amazon-q", "~/.local/share/amazon-q", "~/Library/Application Support/amazon-q", "%LOCALAPPDATA%/amazon-q"]
+color = "#FF9900"
+resume_command = ["q", "chat", "--resume"]
+
+# Tencent CodeBuddy Code: projects/<folder>/<id>.jsonl.
+[[sources]]
+name = "codebuddy"
+format = "codebuddy"
+path = ["${CODEBUDDY_CONFIG_DIR}", "~/.codebuddy"]
+color = "#3D7EFF"
+resume_command = ["codebuddy", "--resume", "{id}"]
+
+# Qoder CLI writes Claude Code's transcript format.
+[[sources]]
+name = "qoder"
+format = "claude"
+path = ["${QODER_CONFIG_DIR}", "${QODER_CLI_HOME}/.qoder", "~/.qoder", "~/.qoder-cn"]
+color = "#2ADB5C"
+resume_command = ["qodercli", "--resume", "{id}"]
+
+# iFlow CLI, also in Claude Code's format.
+[[sources]]
+name = "iflow"
+format = "claude"
+path = ["${IFLOW_HOME}", "~/.iflow"]
+color = "#7B61FF"
+resume_command = ["iflow", "--resume", "{id}"]
+
+# Kode, also in Claude Code's format.
+[[sources]]
+name = "kode"
+format = "claude"
+path = ["${KODE_CONFIG_DIR}", "${ANYKODE_CONFIG_DIR}", "~/.kode"]
+color = "#00B3B3"
+resume_command = ["kode", "--resume", "{id}"]
+
+# Aider keeps .aider.chat.history.md inside each repository, with no list of them
+# anywhere: it is looked for in the folder of every session the other sources found,
+# and below the folders in `path` (3 levels deep), e.g. ["~/projects"]. One entry per
+# repository; resuming loads that repository's whole chat history.
+[[sources]]
+name = "aider"
+format = "aider"
+path = []
+color = "#14B014"
+resume_command = ["aider", "--restore-chat-history"]

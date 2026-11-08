@@ -12,6 +12,8 @@
 //! more recently updated row wins. `parent_id` marks a subagent session. Before 1.2
 //! sessions were JSON files under `storage/`; those builds are long gone and the
 //! files are a dead leftover, so they are not read.
+//!
+//! Kilo Code's CLI is an OpenCode fork with the V1 tables in `~/.local/share/kilo/kilo.db`.
 
 use super::sqlite;
 use crate::session::{Limits, Session};
@@ -21,7 +23,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
-    let db = root.join("opencode.db");
+    load_named(root, "opencode.db", lim, limit)
+}
+
+/// Forks keep the schema under their own name (Kilo Code: `kilo.db`).
+pub fn load_named(root: &Path, name: &str, lim: &Limits, limit: usize) -> Vec<Session> {
+    let db = root.join(name);
     if !db.is_file() {
         return Vec::new();
     }

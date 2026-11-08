@@ -309,10 +309,17 @@ impl<'a> App<'a> {
                 }
                 Action::NextSource | Action::PrevSource => {
                     let n = self.cfg.sources.len();
-                    // None (all) -> 0 -> 1 -> ... -> n-1 -> None
-                    let pos = self.source_filter.map(|i| i + 1).unwrap_or(0);
-                    let next = if action == Action::NextSource { (pos + 1) % (n + 1) } else { (pos + n) % (n + 1) };
-                    self.source_filter = if next == 0 { None } else { Some(next - 1) };
+                    // None (all) -> 0 -> 1 -> ... -> n-1 -> None, skipping sources that
+                    // have no sessions at all (most of the built-in list, for most people).
+                    let has = |i: usize| self.sessions.iter().any(|s| s.source == self.cfg.sources[i].name);
+                    let mut pos = self.source_filter.map(|i| i + 1).unwrap_or(0);
+                    for _ in 0..=n {
+                        pos = if action == Action::NextSource { (pos + 1) % (n + 1) } else { (pos + n) % (n + 1) };
+                        if pos == 0 || has(pos - 1) {
+                            break;
+                        }
+                    }
+                    self.source_filter = if pos == 0 { None } else { Some(pos - 1) };
                     self.refilter();
                 }
                 Action::Reindex => {

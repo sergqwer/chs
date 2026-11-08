@@ -6,7 +6,8 @@ use chs::{index, launch, platform, search, tui};
 use clap::Parser;
 use std::io::IsTerminal;
 
-/// Browse, fuzzy-search and resume your recent Claude Code, Codex and claudellm sessions.
+/// Browse, fuzzy-search and resume your recent terminal AI agent sessions: Claude Code, Codex,
+/// Gemini CLI, Copilot, Cursor, OpenCode, Pi, Qwen, Kimi, DeepSeek Harness, Aider and more.
 ///
 /// Start typing to search; arrows to pick; Enter resumes the session in its own folder.
 #[derive(Parser)]
@@ -23,7 +24,7 @@ struct Cli {
     /// With --list: how many to print.
     #[arg(short = 'n', long)]
     limit: Option<usize>,
-    /// Include non-interactive sessions (claude -p, codex exec, subagents).
+    /// Include non-interactive sessions (claude -p, codex exec, subagents, ...).
     #[arg(short, long)]
     all: bool,
     /// Only this source (a [[sources]] name from the config).
