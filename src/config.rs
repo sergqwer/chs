@@ -383,6 +383,14 @@ impl Config {
         }
         cache_root()
     }
+
+    /// How much prompt text a session keeps.
+    pub fn limits(&self) -> crate::session::Limits {
+        crate::session::Limits {
+            max_prompt_chars: self.search.max_prompt_chars,
+            max_indexed_chars: self.search.max_indexed_chars,
+        }
+    }
 }
 
 /// Tables merge key by key; everything else (arrays included) is replaced.

@@ -9,39 +9,38 @@
 //! whole file, so one file is one entry here; its title is the first prompt of the
 //! latest run.
 
+use super::common::Found;
 use crate::session::{Limits, Session};
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const FILE: &str = ".aider.chat.history.md";
 /// Folders below a configured root that are searched.
 const DEPTH: u8 = 3;
 const SKIP: [&str; 6] = ["node_modules", "target", "venv", "__pycache__", "dist", "build"];
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
+pub fn list_files(root: &Path) -> Vec<Found> {
     let mut out = Vec::new();
     find(root, DEPTH, &mut out);
     out
 }
 
-fn find(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
-    let f = dir.join(FILE);
-    if f.is_file() {
-        out.push(f);
-    }
-    if depth == 0 {
-        return;
-    }
+/// One directory listing per folder finds both the history file and the subfolders.
+fn find(dir: &Path, depth: u8, out: &mut Vec<Found>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
-        let name = e.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') || SKIP.contains(&name.as_ref()) {
-            continue;
-        }
         // file_type() does not follow symlinks, so linked trees are not walked twice.
-        if e.file_type().is_ok_and(|t| t.is_dir()) {
-            find(&e.path(), depth - 1, out);
+        let Ok(ft) = e.file_type() else { continue };
+        let name = e.file_name();
+        if ft.is_file() && name == FILE {
+            if let Ok(md) = e.metadata() {
+                out.push(Found { path: e.path(), md });
+            }
+        } else if ft.is_dir() && depth > 0 {
+            let name = name.to_string_lossy();
+            if !name.starts_with('.') && !SKIP.contains(&name.as_ref()) {
+                find(&e.path(), depth - 1, out);
+            }
         }
     }
 }
@@ -101,16 +100,17 @@ fn flush(lines: &mut Vec<String>, s: &mut Session, lim: &Limits) {
 }
 
 /// The repository is the folder holding the file; the file path is the id.
-pub fn finish(s: &mut Session) {
-    s.id = s.file.to_string_lossy().into_owned();
-    s.cwd = s.file.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+pub fn locate(path: &Path, s: &mut Session) {
+    s.id = path.to_string_lossy().into_owned();
+    s.cwd = path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
-    const LIM: Limits = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+    const LIM: Limits = Limits::TEST;
 
     #[test]
     fn reads_runs() {
@@ -139,12 +139,11 @@ mod tests {
 
     #[test]
     fn finds_files_in_subfolders() {
-        let root = std::env::temp_dir().join(format!("chs-aider-{}", std::process::id()));
+        let root = TempDir::new("aider");
         std::fs::create_dir_all(root.join("a/b")).unwrap();
         std::fs::create_dir_all(root.join("node_modules/x")).unwrap();
         std::fs::write(root.join("a/b").join(FILE), "").unwrap();
         std::fs::write(root.join("node_modules/x").join(FILE), "").unwrap();
-        assert_eq!(list_files(&root), vec![root.join("a/b").join(FILE)]);
-        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(paths(list_files(&root)), vec![root.join("a/b").join(FILE)]);
     }
 }

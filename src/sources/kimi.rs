@@ -12,26 +12,20 @@
 //!   `state.json` (`custom_title`). The folder is found through `kimi.json`, whose
 //!   `work_dirs[].path` hash to the folder names.
 
-use super::common::{jsonl, ms_of, read_json, str_of, text_of};
+use super::common::{jsonl, ms_of, read_json, stat, str_of, subdirs, text_of, Found};
 use crate::session::{Limits, Session};
 use md5::{Digest, Md5};
 use serde_json::Value;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-fn session_dirs(root: &Path) -> impl Iterator<Item = PathBuf> {
-    std::fs::read_dir(root.join("sessions"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .flat_map(|ws| std::fs::read_dir(ws.path()).into_iter().flatten().flatten())
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|e| e.path())
+/// `sessions/<workspace>/<session>/<name>` (both generations).
+fn session_files(root: &Path, name: &str) -> Vec<Found> {
+    subdirs(&root.join("sessions")).flat_map(|ws| subdirs(&ws)).filter_map(|d| stat(d.join(name))).collect()
 }
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    session_dirs(root).map(|d| d.join("state.json")).filter(|p| p.is_file()).collect()
+pub fn list_files(root: &Path) -> Vec<Found> {
+    session_files(root, "state.json")
 }
 
 pub fn companions(state: &Path) -> Vec<PathBuf> {
@@ -64,8 +58,8 @@ pub fn parse_file(state: &Path, s: &mut Session, lim: &Limits) -> std::io::Resul
     Ok(())
 }
 
-pub fn legacy_list_files(root: &Path) -> Vec<PathBuf> {
-    session_dirs(root).map(|d| d.join("wire.jsonl")).filter(|p| p.is_file()).collect()
+pub fn legacy_list_files(root: &Path) -> Vec<Found> {
+    session_files(root, "wire.jsonl")
 }
 
 /// The state, and `kimi.json` at the root, which maps the folder hashes to paths.
@@ -120,12 +114,13 @@ fn hex_md5(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
-    const LIM: Limits = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+    const LIM: Limits = Limits::TEST;
 
     #[test]
     fn reads_kimi_code() {
-        let root = std::env::temp_dir().join(format!("chs-kimi-{}", std::process::id()));
+        let root = TempDir::new("kimi");
         let dir = root.join("sessions/wd_proj_1a2b3c4d5e6f/9d1c");
         std::fs::create_dir_all(dir.join("agents/main")).unwrap();
         let state = dir.join("state.json");
@@ -144,19 +139,18 @@ mod tests {
             ),
         )
         .unwrap();
-        assert_eq!(list_files(&root), vec![state.clone()]);
+        assert_eq!(paths(list_files(&root)), vec![state.clone()]);
         let mut s = Session::default();
         parse_file(&state, &mut s, &LIM).unwrap();
         assert_eq!(s.id, "9d1c");
         assert_eq!(s.cwd, "/home/u/proj");
         assert_eq!(s.prompts, vec!["list the files here", "now add a README"]);
         assert_eq!(s.title(), "list the files here");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn reads_legacy_kimi_cli() {
-        let root = std::env::temp_dir().join(format!("chs-kimi-old-{}", std::process::id()));
+        let root = TempDir::new("kimi-old");
         let work = "/home/u/proj";
         let dir = root.join("sessions").join(hex_md5(work)).join("s-1");
         std::fs::create_dir_all(&dir).unwrap();
@@ -178,7 +172,7 @@ mod tests {
             ),
         )
         .unwrap();
-        assert_eq!(legacy_list_files(&root), vec![wire.clone()]);
+        assert_eq!(paths(legacy_list_files(&root)), vec![wire.clone()]);
         let mut s = Session::default();
         legacy_parse_file(&wire, &mut s, &LIM).unwrap();
         assert_eq!(s.id, "s-1");
@@ -186,6 +180,5 @@ mod tests {
         assert_eq!(s.started_ms, 1762596005100);
         assert_eq!(s.prompts, vec!["list the files here", "now add a README"]);
         assert_eq!(s.title(), "Files");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

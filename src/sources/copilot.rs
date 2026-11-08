@@ -9,14 +9,14 @@
 //!   with no `data.source` or `"user"` are typed by a person; `skill-*`, `agent-*` and
 //!   autopilot continuations are injected - the same filter Copilot's own history uses.
 
-use super::common::{jsonl, ms_of, str_of};
+use super::common::{jsonl, ms_of, per_folder, str_of, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    super::common::per_folder(&root.join("session-state"), "events.jsonl")
+pub fn list_files(root: &Path) -> Vec<Found> {
+    per_folder(&root.join("session-state"), "events.jsonl")
 }
 
 const NEEDLES: [&str; 4] = ["\"session.start\"", "\"session.resume\"", "\"session.title_changed\"", "\"user.message\""];
@@ -79,7 +79,7 @@ mod tests {
             "",
         ]
         .join("\n");
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse(text.as_bytes(), &mut s, &lim).unwrap();
         assert_eq!(s.id, "7f3c");

@@ -11,17 +11,13 @@
 //!
 //! Prompts come from the transcript; the list, folder and title from meta.json.
 
-use super::common::{jsonl, read_json, str_of, text_of};
+use super::common::{jsonl, per_folder, read_json, str_of, subdirs, text_of, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(root.join("chats")) else { return Vec::new() };
-    rd.flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .flat_map(|e| super::common::per_folder(&e.path(), "meta.json"))
-        .collect()
+pub fn list_files(root: &Path) -> Vec<Found> {
+    subdirs(&root.join("chats")).flat_map(|workspace| per_folder(&workspace, "meta.json")).collect()
 }
 
 /// The transcript; finding it takes the folder from meta.json.
@@ -50,7 +46,8 @@ fn slug(path: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
-pub fn parse_file(meta: &Path, s: &mut Session, lim: &Limits) -> std::io::Result<()> {
+/// `transcript` is the companion found for this chat, if any.
+pub fn parse_file(meta: &Path, transcript: Option<&Path>, s: &mut Session, lim: &Limits) -> std::io::Result<()> {
     let v: Value = read_json(meta)?;
     if v["hasConversation"] == false {
         return Ok(());
@@ -62,7 +59,7 @@ pub fn parse_file(meta: &Path, s: &mut Session, lim: &Limits) -> std::io::Result
     if v["isSubagent"] == true {
         s.entry = Some("subagent".into());
     }
-    if let Some(t) = transcript(meta) {
+    if let Some(t) = transcript {
         let file = std::fs::File::open(t)?;
         jsonl::<Value>(std::io::BufReader::new(file), &["\"role\":\"user\"", "\"role\": \"user\""], |line| {
             if line["role"] == "user" {
@@ -84,6 +81,7 @@ fn user_query(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn slugs_like_cursor() {
@@ -94,7 +92,7 @@ mod tests {
 
     #[test]
     fn reads_meta_and_transcript() {
-        let root = std::env::temp_dir().join(format!("chs-cursor-{}", std::process::id()));
+        let root = TempDir::new("cursor");
         let chat = root.join("chats/0123abcd/0c9a");
         std::fs::create_dir_all(&chat).unwrap();
         let meta = chat.join("meta.json");
@@ -113,15 +111,14 @@ mod tests {
             ),
         )
         .unwrap();
-        assert_eq!(list_files(&root), vec![meta.clone()]);
+        assert_eq!(paths(list_files(&root)), vec![meta.clone()]);
         assert_eq!(companions(&meta), vec![tdir.join("0c9a.jsonl")]);
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let mut s = Session::default();
-        parse_file(&meta, &mut s, &lim).unwrap();
+        parse_file(&meta, companions(&meta).first().map(PathBuf::as_path), &mut s, &lim).unwrap();
         assert_eq!(s.id, "0c9a");
         assert_eq!(s.cwd, "/home/u/proj");
         assert_eq!(s.prompts, vec!["fix the failing test", "now add a changelog entry"]);
         assert_eq!(s.title(), "Fix failing test");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

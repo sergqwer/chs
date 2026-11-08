@@ -6,19 +6,14 @@
 //! title comes from Claude-style `custom-title` / `ai-title` lines or the
 //! `codebuddy.ai/sessionTitle` key of a `session-meta` line.
 
-use super::common::{jsonl, ms_of, str_of, text_of};
+use super::common::{files_in_subdirs, jsonl, ms_of, str_of, text_of, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(root.join("projects")) else { return Vec::new() };
-    let mut out = Vec::new();
-    for project in rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
-        super::common::walk(&project.path(), 0, &|n| n.ends_with(".jsonl"), &mut out);
-    }
-    out
+pub fn list_files(root: &Path) -> Vec<Found> {
+    files_in_subdirs(&root.join("projects"), &|n| n.ends_with(".jsonl"))
 }
 
 const NEEDLES: [&str; 5] =
@@ -73,7 +68,7 @@ mod tests {
             "",
         ]
         .join("\n");
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse(text.as_bytes(), &mut s, &lim).unwrap();
         assert_eq!(s.id, "S1");

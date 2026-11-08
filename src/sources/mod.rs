@@ -39,6 +39,8 @@ pub mod vibe;
 
 use crate::config::Format;
 use crate::session::{Limits, Session};
+use common::Found;
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
@@ -68,8 +70,8 @@ pub fn incremental(format: Format, path: &Path) -> bool {
     }
 }
 
-/// The main file of every session below `root`.
-pub fn list_files(format: Format, root: &Path) -> Vec<PathBuf> {
+/// The main file of every session below `root`, with its metadata.
+pub fn list_files(format: Format, root: &Path) -> Vec<Found> {
     use Format::*;
     match format {
         Claude => claude::list_files(root),
@@ -95,7 +97,8 @@ pub fn list_files(format: Format, root: &Path) -> Vec<PathBuf> {
 }
 
 /// Other files a whole-file session is read from: their size and mtime count towards
-/// the cache fingerprint (missing ones are simply skipped).
+/// the cache fingerprint (missing ones are simply skipped). Only asked for sessions
+/// the index actually looks at, since some (Cursor) cost a small read.
 pub fn companions(format: Format, path: &Path) -> Vec<PathBuf> {
     use Format::*;
     match format {
@@ -109,34 +112,51 @@ pub fn companions(format: Format, path: &Path) -> Vec<PathBuf> {
     }
 }
 
-/// Continue an incremental parse; returns the bytes consumed.
-pub fn parse(format: Format, reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
+/// Continue an incremental parse of `path`; returns the bytes consumed.
+pub fn parse(format: Format, path: &Path, reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
     use Format::*;
     match format {
         Claude => claude::parse(reader, s, lim),
         Codex => codex::parse(reader, s, lim),
         Pi => pi::parse(reader, s, lim),
         Copilot => copilot::parse(reader, s, lim),
-        Droid => droid::parse(reader, s, lim),
         Qwen => qwen::parse(reader, s, lim),
         Codebuddy => codebuddy::parse(reader, s, lim),
-        Aider => aider::parse(reader, s, lim),
-        Gemini => gemini::parse(reader, s, lim),
         Dsh => dsh::parse(reader, s, lim),
+        Aider => {
+            let n = aider::parse(reader, s, lim)?;
+            aider::locate(path, s);
+            Ok(n)
+        }
+        Gemini => {
+            let n = gemini::parse(reader, s, lim)?;
+            gemini::locate(path, s);
+            Ok(n)
+        }
         _ => Ok(0),
     }
 }
 
-/// Read a whole-file session (and its companions) from scratch.
-pub fn parse_file(format: Format, path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result<()> {
+/// Read a whole-file session from scratch; `companions` is what `companions()` gave.
+pub fn parse_file(
+    format: Format,
+    path: &Path,
+    companions: &[PathBuf],
+    s: &mut Session,
+    lim: &Limits,
+) -> std::io::Result<()> {
     use Format::*;
     match format {
-        Cursor => cursor::parse_file(path, s, lim),
+        Cursor => cursor::parse_file(path, companions.first().map(PathBuf::as_path), s, lim),
         Cline => cline::parse_file(path, s, lim),
         Openhands => openhands::parse_file(path, s, lim),
         Continue => continue_cli::parse_file(path, s, lim),
         Auggie => auggie::parse_file(path, s, lim),
-        Gemini => gemini::parse_file(path, s, lim),
+        Gemini => {
+            gemini::parse_file(path, s, lim)?;
+            gemini::locate(path, s);
+            Ok(())
+        }
         Kimi => kimi::parse_file(path, s, lim),
         KimiCli => kimi::legacy_parse_file(path, s, lim),
         Vibe => vibe::parse_file(path, s, lim),
@@ -146,33 +166,69 @@ pub fn parse_file(format: Format, path: &Path, s: &mut Session, lim: &Limits) ->
     }
 }
 
-/// Newest `limit` sessions of a database-backed source.
-pub fn load_database(format: Format, root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
+/// Prompts of database sessions from the previous run. A database is queried on every
+/// start, but a row whose update time has not moved keeps the prompts read last time
+/// instead of having its messages read and parsed again.
+pub struct Reuse<'a> {
+    old: &'a HashMap<String, Session>,
+    format: Format,
+}
+
+impl<'a> Reuse<'a> {
+    pub fn new(old: &'a HashMap<String, Session>, format: Format) -> Reuse<'a> {
+        Reuse { old, format }
+    }
+
+    pub fn key(format: Format, s: &Session) -> String {
+        format!("{format:?}|{}|{}", s.file.to_string_lossy(), s.id)
+    }
+
+    /// Fill `s` with the cached prompts; false when they have to be read.
+    pub fn fill(&self, s: &mut Session) -> bool {
+        match self.old.get(&Self::key(self.format, s)) {
+            Some(p) if s.updated_ms != 0 && p.updated_ms == s.updated_ms => {
+                s.prompts.clone_from(&p.prompts);
+                s.prompt_count = p.prompt_count;
+                s.prompt_chars = p.prompt_chars;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Newest `limit` sessions of a database-backed source, newest first.
+pub fn load_database(format: Format, root: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> Vec<Session> {
     match format {
-        Format::Opencode => opencode::load(root, lim, limit),
-        Format::Kilo => opencode::load_named(root, "kilo.db", lim, limit),
-        Format::Crush => crush::load(root, lim, limit),
-        Format::Goose => goose::load(root, lim, limit),
+        Format::Opencode => opencode::load(root, "opencode.db", lim, limit, reuse),
+        Format::Kilo => opencode::load(root, "kilo.db", lim, limit, reuse),
+        Format::Crush => crush::load(root, lim, limit, reuse),
+        Format::Goose => goose::load(root, lim, limit, reuse),
+        // One row per folder, and no update time to tell a changed row by.
         Format::Amazonq => amazonq::load(root, lim, limit),
-        Format::Hermes => hermes::load(root, lim, limit),
-        Format::Antigravity => antigravity::load(root, lim, limit),
+        Format::Hermes => hermes::load(root, lim, limit, reuse),
+        Format::Antigravity => antigravity::load(root, lim, limit, reuse),
         _ => Vec::new(),
     }
 }
 
 /// Turn the raw (cached) parse state into what is displayed and searched. Runs on
-/// every load, so it must stay cheap.
+/// every load, so it must stay cheap: anything that reads a file belongs in the parse,
+/// whose result is cached.
 pub fn finish(format: Format, s: &mut Session, lim: &Limits) {
-    match format {
-        Format::Codex => codex::finish(s, lim),
-        Format::Droid => droid::finish(s),
-        Format::Gemini => gemini::finish(s),
-        Format::Aider => aider::finish(s),
-        _ => {}
+    if format == Format::Codex {
+        codex::finish(s, lim);
     }
     if s.id.is_empty() {
         s.id = id_from_path(format, &s.file);
     }
+}
+
+/// Whether `finish` would make the raw parse state `s` of `path` worth listing,
+/// without the copy that finishing it takes.
+pub fn useful(format: Format, s: &Session, path: &Path) -> bool {
+    let id = !s.id.is_empty() || !id_from_path(format, path).is_empty();
+    id && (s.has_content() || !s.alt_prompts.is_empty())
 }
 
 /// Fallback when a file never states its session id; empty where the name is not one.

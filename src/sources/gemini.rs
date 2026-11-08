@@ -12,18 +12,17 @@
 //! `functionResponse`); like Gemini's own session list, commands (`/`, `?`) and
 //! injected `<session_context>` / `<hook_context>` blocks are not prompts.
 
-use super::common::{jsonl, ms_of, read_json, str_of, text_of};
+use super::common::{jsonl, ms_of, read_json, str_of, subdirs, text_of, walk, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(root.join("tmp")) else { return Vec::new() };
+pub fn list_files(root: &Path) -> Vec<Found> {
+    let keep = |n: &str| n.starts_with("session-") && (n.ends_with(".jsonl") || n.ends_with(".json"));
     let mut out = Vec::new();
-    for project in rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
-        let keep = |n: &str| n.starts_with("session-") && (n.ends_with(".jsonl") || n.ends_with(".json"));
-        super::common::walk(&project.path().join("chats"), 0, &keep, &mut out);
+    for project in subdirs(&root.join("tmp")) {
+        walk(&project.join("chats"), 0, &keep, &mut out);
     }
     out
 }
@@ -102,12 +101,13 @@ fn message(m: &Value, s: &mut Session, lim: &Limits) {
     s.push_prompt(&text, lim);
 }
 
-/// The project folder, from the `.project_root` marker of the chat's project.
-pub fn finish(s: &mut Session) {
+/// The project folder, from the `.project_root` marker of the chat's project. Runs
+/// with the parse, so the result is cached with it.
+pub fn locate(path: &Path, s: &mut Session) {
     if !s.cwd.is_empty() {
         return;
     }
-    let marker = s.file.parent().and_then(Path::parent).map(|p| p.join(".project_root"));
+    let marker = path.parent().and_then(Path::parent).map(|p| p.join(".project_root"));
     if let Some(root) = marker.and_then(|m| std::fs::read_to_string(m).ok()) {
         s.cwd = root.trim().to_string();
     }
@@ -116,8 +116,9 @@ pub fn finish(s: &mut Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
-    const LIM: Limits = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+    const LIM: Limits = Limits::TEST;
 
     #[test]
     fn reads_jsonl_session() {
@@ -144,20 +145,19 @@ mod tests {
 
     #[test]
     fn reads_legacy_json_and_project_root() {
-        let root = std::env::temp_dir().join(format!("chs-gem-{}", std::process::id()));
+        let root = TempDir::new("gem");
         let chats = root.join("tmp/proj/chats");
         std::fs::create_dir_all(&chats).unwrap();
         std::fs::write(root.join("tmp/proj/.project_root"), "/home/u/proj\n").unwrap();
         let f = chats.join("session-2026-03-01T10-00-3f2a.json");
         std::fs::write(&f, r#"{"sessionId":"old1","startTime":"2026-03-01T10:00:00Z","messages":[{"id":"a","type":"user","content":"hello"}]}"#).unwrap();
-        assert_eq!(list_files(&root), vec![f.clone()]);
+        assert_eq!(paths(list_files(&root)), vec![f.clone()]);
         assert!(!incremental(&f));
-        let mut s = Session { file: f.clone(), ..Default::default() };
+        let mut s = Session::default();
         parse_file(&f, &mut s, &LIM).unwrap();
-        finish(&mut s);
+        locate(&f, &mut s);
         assert_eq!(s.id, "old1");
         assert_eq!(s.prompts, vec!["hello"]);
         assert_eq!(s.cwd, "/home/u/proj");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

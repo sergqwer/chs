@@ -4,34 +4,18 @@
 //! Only the few line kinds that matter are deserialized; a cheap substring test skips
 //! the (often multi-megabyte) assistant and tool-result lines without parsing them.
 
+use super::common::{files_in_subdirs, jsonl, Found};
 use crate::session::{parse_ts, Limits, Session};
-use memchr::memmem;
 use serde::de::{self, Deserializer, IgnoredAny, SeqAccess, Visitor};
 use serde::Deserialize;
 use std::fmt;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Session files of one Claude config root. Subagent transcripts live one level
 /// deeper (`<session>/subagents/*.jsonl`) and are not conversations of their own.
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(projects) = std::fs::read_dir(root.join("projects")) else {
-        return out;
-    };
-    for project in projects.flatten() {
-        if !project.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        let Ok(files) = std::fs::read_dir(project.path()) else { continue };
-        for f in files.flatten() {
-            let p = f.path();
-            if p.extension().is_some_and(|e| e == "jsonl") && f.file_type().is_ok_and(|t| t.is_file()) {
-                out.push(p);
-            }
-        }
-    }
-    out
+pub fn list_files(root: &Path) -> Vec<Found> {
+    files_in_subdirs(&root.join("projects"), &|n| n.ends_with(".jsonl"))
 }
 
 #[derive(Deserialize)]
@@ -113,38 +97,22 @@ struct Part {
 }
 
 // Claude Code writes compact JSON; the spaced spellings keep other writers working.
-const NEEDLES: [&[u8]; 8] = [
-    b"\"type\":\"user\"",
-    b"\"type\":\"custom-title\"",
-    b"\"type\":\"ai-title\"",
-    b"\"type\":\"summary\"",
-    b"\"type\": \"user\"",
-    b"\"type\": \"custom-title\"",
-    b"\"type\": \"ai-title\"",
-    b"\"type\": \"summary\"",
+const NEEDLES: [&str; 8] = [
+    "\"type\":\"user\"",
+    "\"type\":\"custom-title\"",
+    "\"type\":\"ai-title\"",
+    "\"type\":\"summary\"",
+    "\"type\": \"user\"",
+    "\"type\": \"custom-title\"",
+    "\"type\": \"ai-title\"",
+    "\"type\": \"summary\"",
 ];
 
 /// Parse complete lines from `reader` into `s` (which may already hold the result of
 /// an earlier, shorter read of the same file). Returns the number of bytes consumed;
 /// a trailing line without its newline is still being written and is left for later.
-pub fn parse(mut reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
-    let finders: Vec<memmem::Finder> = NEEDLES.iter().map(memmem::Finder::new).collect();
-    let mut buf = Vec::with_capacity(64 * 1024);
-    let mut consumed = 0u64;
-    loop {
-        buf.clear();
-        let n = reader.read_until(b'\n', &mut buf)?;
-        if n == 0 || buf.last() != Some(&b'\n') {
-            break;
-        }
-        consumed += n as u64;
-        if !finders.iter().any(|f| f.find(&buf).is_some()) {
-            continue;
-        }
-        let Ok(line) = serde_json::from_slice::<Line>(&buf) else { continue };
-        apply(line, s, lim);
-    }
-    Ok(consumed)
+pub fn parse(reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
+    jsonl::<Line>(reader, &NEEDLES, |line| apply(line, s, lim))
 }
 
 fn apply(line: Line, s: &mut Session, lim: &Limits) {
@@ -239,7 +207,7 @@ fn clean_prompt(text: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const LIM: Limits = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+    const LIM: Limits = Limits::TEST;
 
     fn run(lines: &[&str]) -> (Session, u64) {
         let data = lines.iter().map(|l| format!("{l}\n")).collect::<String>();

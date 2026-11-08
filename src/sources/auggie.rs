@@ -5,15 +5,13 @@
 //! is in a request node of type 4: `ide_state_node.workspace_folders[0]`
 //! `.repository_root` / `.folder_root`.
 
-use super::common::{ms_of, read_json, walk};
+use super::common::{files, ms_of, read_json, Found};
 use crate::session::{Limits, Session};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk(&root.join("sessions"), 0, &|n| n.ends_with(".json") && !is_backup(n), &mut out);
-    out
+pub fn list_files(root: &Path) -> Vec<Found> {
+    files(&root.join("sessions"), &|n| n.ends_with(".json") && !is_backup(n))
 }
 
 fn is_backup(name: &str) -> bool {
@@ -94,12 +92,13 @@ pub fn parse_file(path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_session_file() {
         assert!(is_backup("abc-backup2.json"));
         assert!(!is_backup("abc.json"));
-        let dir = std::env::temp_dir().join(format!("chs-aug-{}", std::process::id()));
+        let dir = TempDir::new("aug");
         std::fs::create_dir_all(dir.join("sessions")).unwrap();
         let f = dir.join("sessions/s1.json");
         std::fs::write(
@@ -112,14 +111,13 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join("sessions/s1-backup1.json"), "{}").unwrap();
-        assert_eq!(list_files(&dir), vec![f.clone()]);
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        assert_eq!(paths(list_files(&dir)), vec![f.clone()]);
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse_file(&f, &mut s, &lim).unwrap();
         assert_eq!(s.id, "s1");
         assert_eq!(s.cwd, "/home/u/p");
         assert_eq!(s.prompts, vec!["add a flag", "and a test"]);
         assert_eq!(s.title(), "Add flag");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

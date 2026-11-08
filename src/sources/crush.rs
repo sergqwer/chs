@@ -10,11 +10,12 @@
 //!   A user message carrying `shell_command` or `sub_agent_report` parts is tool
 //!   plumbing, not something the user typed.
 
-use super::sqlite;
+use super::{sqlite, Reuse};
 use crate::session::{Limits, Session};
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
@@ -30,49 +31,57 @@ struct Project {
     data_dir: String,
 }
 
-pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
+pub fn load(root: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> Vec<Session> {
     let Ok(text) = std::fs::read_to_string(root.join("projects.json")) else { return Vec::new() };
     let Ok(list) = serde_json::from_str::<ProjectList>(&text) else { return Vec::new() };
+    // The rows of every project first; prompts only for the newest `limit` of them all.
+    let mut conns: HashMap<PathBuf, Connection> = HashMap::new();
     let mut out = Vec::new();
     for p in list.projects {
         let data = if p.data_dir.is_empty() { Path::new(&p.path).join(".crush") } else { PathBuf::from(&p.data_dir) };
         let db = data.join("crush.db");
-        if db.is_file() {
-            out.extend(read(&db, &p.path, lim, limit).unwrap_or_default());
+        let Ok(conn) = (if db.is_file() { sqlite::open(&db) } else { continue }) else { continue };
+        if let Ok(rows) = sessions(&conn, &db, &p.path, limit) {
+            out.extend(rows);
+            conns.insert(db, conn);
         }
     }
     out.sort_by_key(|s| std::cmp::Reverse(s.updated_ms));
     out.truncate(limit);
+    for s in &mut out {
+        if !reuse.fill(s) {
+            if let Some(conn) = conns.get(&s.file) {
+                let _ = prompts(conn, s, lim);
+            }
+        }
+    }
     out
 }
 
-fn read(db: &Path, project: &str, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>> {
-    let conn = sqlite::open(db)?;
-    let cols = sqlite::columns(&conn, "sessions")?;
+fn sessions(conn: &Connection, db: &Path, project: &str, limit: usize) -> rusqlite::Result<Vec<Session>> {
+    let cols = sqlite::columns(conn, "sessions")?;
     let parent = sqlite::col_or(&cols, "parent_session_id", "NULL");
     let sql =
         format!("SELECT id, title, created_at, updated_at, {parent} FROM sessions ORDER BY updated_at DESC LIMIT ?1");
     let mut stmt = conn.prepare(&sql)?;
-    let sessions: Vec<Session> = stmt
-        .query_map([limit as i64], |r| {
-            let title: Option<String> = r.get(1)?;
-            let parent: Option<String> = r.get(4)?;
-            Ok(Session {
-                id: r.get(0)?,
-                cwd: project.to_string(),
-                custom_title: title.filter(|t| !t.trim().is_empty() && t != "Untitled Session"),
-                started_ms: r.get::<_, Option<i64>>(2)?.unwrap_or(0) * 1000,
-                updated_ms: r.get::<_, Option<i64>>(3)?.unwrap_or(0) * 1000,
-                entry: parent.map(|_| "subagent".to_string()),
-                file: db.to_path_buf(),
-                ..Default::default()
-            })
-        })?
-        .collect::<Result<_, _>>()?;
-    sessions.into_iter().map(|s| with_prompts(&conn, s, lim)).collect()
+    let rows = stmt.query_map([limit as i64], |r| {
+        let title: Option<String> = r.get(1)?;
+        let parent: Option<String> = r.get(4)?;
+        Ok(Session {
+            id: r.get(0)?,
+            cwd: project.to_string(),
+            custom_title: title.filter(|t| !t.trim().is_empty() && t != "Untitled Session"),
+            started_ms: r.get::<_, Option<i64>>(2)?.unwrap_or(0) * 1000,
+            updated_ms: r.get::<_, Option<i64>>(3)?.unwrap_or(0) * 1000,
+            entry: parent.map(|_| "subagent".to_string()),
+            file: db.to_path_buf(),
+            ..Default::default()
+        })
+    })?;
+    rows.collect()
 }
 
-fn with_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite::Result<Session> {
+fn prompts(conn: &Connection, s: &mut Session, lim: &Limits) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(
         "SELECT parts FROM messages WHERE session_id = ?1 AND role = 'user' ORDER BY created_at, rowid",
     )?;
@@ -81,13 +90,15 @@ fn with_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite::Re
             s.push_prompt(&t, lim);
         }
     }
-    Ok(s)
+    Ok(())
 }
 
 fn user_text(parts: &str) -> Option<String> {
     let parts: Vec<Value> = serde_json::from_str(parts).ok()?;
-    let kind = |p: &Value| p.get("type").and_then(Value::as_str).unwrap_or("").to_string();
-    if parts.iter().any(|p| matches!(kind(p).as_str(), "shell_command" | "sub_agent_report")) {
+    fn kind(p: &Value) -> &str {
+        p.get("type").and_then(Value::as_str).unwrap_or("")
+    }
+    if parts.iter().any(|p| matches!(kind(p), "shell_command" | "sub_agent_report")) {
         return None;
     }
     let texts: Vec<&str> = parts
@@ -101,11 +112,11 @@ fn user_text(parts: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_projects_and_sessions() {
-        let base = std::env::temp_dir().join(format!("chs-crush-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = TempDir::new("crush");
         let proj = base.join("proj");
         let data = proj.join(".crush");
         std::fs::create_dir_all(&data).unwrap();
@@ -130,8 +141,8 @@ mod tests {
                 "#,
             )
             .unwrap();
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
-        let v = load(&global, &lim, 10);
+        let lim = Limits::TEST;
+        let v = load(&global, &lim, 10, &fresh(crate::config::Format::Crush));
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].id, "s1");
         assert_eq!(v[0].updated_ms, 2_000_000);
@@ -139,6 +150,5 @@ mod tests {
         assert_eq!(v[0].prompts, vec!["refactor the db layer", "and add tests"]);
         assert_eq!(v[0].title(), "refactor the db layer");
         assert_eq!(v[1].entry.as_deref(), Some("subagent"));
-        std::fs::remove_dir_all(&base).unwrap();
     }
 }

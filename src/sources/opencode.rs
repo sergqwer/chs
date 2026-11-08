@@ -15,49 +15,54 @@
 //!
 //! Kilo Code's CLI is an OpenCode fork with the V1 tables in `~/.local/share/kilo/kilo.db`.
 
-use super::sqlite;
+use super::{sqlite, Reuse};
 use crate::session::{Limits, Session};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
-    load_named(root, "opencode.db", lim, limit)
-}
-
-/// Forks keep the schema under their own name (Kilo Code: `kilo.db`).
-pub fn load_named(root: &Path, name: &str, lim: &Limits, limit: usize) -> Vec<Session> {
+/// `name` is `opencode.db`, or what a fork calls it (Kilo Code: `kilo.db`).
+pub fn load(root: &Path, name: &str, lim: &Limits, limit: usize, reuse: &Reuse) -> Vec<Session> {
     let db = root.join(name);
-    if !db.is_file() {
-        return Vec::new();
-    }
-    read(&db, lim, limit).unwrap_or_default()
+    sqlite::with_db(&db, |conn| read(conn, &db, lim, limit, reuse))
 }
 
-fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>> {
-    let conn = sqlite::open(db)?;
-    let tables = sqlite::tables(&conn)?;
-    let mut by_id: HashMap<String, Session> = HashMap::new();
-    let mut keep = |s: Session| {
-        if by_id.get(&s.id).is_none_or(|old| old.updated_ms < s.updated_ms) {
-            by_id.insert(s.id.clone(), s);
+fn read(conn: &Connection, db: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> rusqlite::Result<Vec<Session>> {
+    let tables = sqlite::tables(conn)?;
+    // Per id the more recently updated row wins; `true` = it is a V2 row.
+    let mut by_id: HashMap<String, (Session, bool)> = HashMap::new();
+    let mut keep = |s: Session, v2: bool| {
+        if by_id.get(&s.id).is_none_or(|(old, _)| old.updated_ms < s.updated_ms) {
+            by_id.insert(s.id.clone(), (s, v2));
         }
     };
     if tables.contains("session_v2") && tables.contains("session_message") {
-        for s in sessions(&conn, "session_v2", db, limit)? {
-            keep(with_v2_prompts(&conn, s, lim)?);
+        for s in sessions(conn, "session_v2", db, limit)? {
+            keep(s, true);
         }
     }
     if tables.contains("session") && tables.contains("message") && tables.contains("part") {
-        for s in sessions(&conn, "session", db, limit)? {
-            keep(with_v1_prompts(&conn, s, lim)?);
+        for s in sessions(conn, "session", db, limit)? {
+            keep(s, false);
         }
     }
-    let mut out: Vec<Session> = by_id.into_values().collect();
-    out.sort_by_key(|s| std::cmp::Reverse(s.updated_ms));
+    let mut out: Vec<(Session, bool)> = by_id.into_values().collect();
+    out.sort_by_key(|(s, _)| std::cmp::Reverse(s.updated_ms));
     out.truncate(limit);
-    Ok(out)
+    // Prompts only for the rows that made it, and only when they changed.
+    out.into_iter()
+        .map(|(mut s, v2)| {
+            if !reuse.fill(&mut s) {
+                if v2 {
+                    v2_prompts(conn, &mut s, lim)?;
+                } else {
+                    v1_prompts(conn, &mut s, lim)?;
+                }
+            }
+            Ok(s)
+        })
+        .collect()
 }
 
 fn sessions(conn: &Connection, table: &str, db: &Path, limit: usize) -> rusqlite::Result<Vec<Session>> {
@@ -86,7 +91,7 @@ fn sessions(conn: &Connection, table: &str, db: &Path, limit: usize) -> rusqlite
     rows.collect()
 }
 
-fn with_v2_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite::Result<Session> {
+fn v2_prompts(conn: &Connection, s: &mut Session, lim: &Limits) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(
         "SELECT data FROM session_message WHERE session_id = ?1 AND type = 'user' ORDER BY seq, time_created",
     )?;
@@ -95,10 +100,10 @@ fn with_v2_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite:
             s.push_prompt(&t, lim);
         }
     }
-    Ok(s)
+    Ok(())
 }
 
-fn with_v1_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite::Result<Session> {
+fn v1_prompts(conn: &Connection, s: &mut Session, lim: &Limits) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(
         "SELECT m.id, m.data, p.data FROM message m JOIN part p ON p.message_id = m.id \
          WHERE m.session_id = ?1 ORDER BY m.time_created, m.id, p.id",
@@ -121,7 +126,7 @@ fn with_v1_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite:
         }
     }
     s.push_prompt(&text, lim);
-    Ok(s)
+    Ok(())
 }
 
 /// The text of a V1 part, if it belongs to a user message and was typed by the user.
@@ -154,13 +159,13 @@ fn real_title(t: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Format;
+    use crate::sources::common::testing::*;
 
-    const LIM: Limits = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+    const LIM: Limits = Limits::TEST;
 
-    fn temp_db(name: &str, sql: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("chs-oc-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn temp_db(name: &str, sql: &str) -> TempDir {
+        let dir = TempDir::new(&format!("oc-{name}"));
         Connection::open(dir.join("opencode.db")).unwrap().execute_batch(sql).unwrap();
         dir
     }
@@ -187,7 +192,7 @@ mod tests {
     #[test]
     fn reads_v1() {
         let dir = temp_db("v1", V1);
-        let v = load(&dir, &LIM, 50);
+        let v = load(&dir, "opencode.db", &LIM, 50, &fresh(Format::Opencode));
         let ids: Vec<&str> = v.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["ses_b", "ses_kid", "ses_old"], "newest first, archived hidden");
         assert_eq!(v[0].prompts, vec!["fix the login bug", "now add tests"]);
@@ -195,7 +200,23 @@ mod tests {
         assert_eq!(v[0].cwd, "D:/work/app");
         assert_eq!(v[1].entry.as_deref(), Some("subagent"));
         assert_eq!(v[2].title(), "Old");
-        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unchanged_rows_reuse_last_prompts() {
+        let dir = temp_db("reuse", V1);
+        let first = load(&dir, "opencode.db", &LIM, 50, &fresh(Format::Opencode));
+        let old: HashMap<String, Session> = first.into_iter().map(|s| (Reuse::key(Format::Opencode, &s), s)).collect();
+        // The messages vanish, but ses_b's update time has not moved: its prompts are
+        // taken from the previous run instead of being read again.
+        let conn = Connection::open(dir.join("opencode.db")).unwrap();
+        conn.execute_batch("DELETE FROM part; UPDATE session SET time_updated = 301 WHERE id = 'ses_old';").unwrap();
+        drop(conn);
+        let v = load(&dir, "opencode.db", &LIM, 50, &Reuse::new(&old, Format::Opencode));
+        let b = v.iter().find(|s| s.id == "ses_b").unwrap();
+        assert_eq!(b.prompts, vec!["fix the login bug", "now add tests"]);
+        let o = v.iter().find(|s| s.id == "ses_old").unwrap();
+        assert!(o.prompts.is_empty(), "a changed row is read again");
     }
 
     #[test]
@@ -219,13 +240,12 @@ mod tests {
             "#
         );
         let dir = temp_db("v2", &sql);
-        let v = load(&dir, &LIM, 50);
+        let v = load(&dir, "opencode.db", &LIM, 50, &fresh(Format::Opencode));
         let ids: Vec<&str> = v.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["ses_new", "ses_b", "ses_kid", "ses_old"]);
         let b = &v[1];
         assert_eq!(b.prompts, vec!["fix the login bug", "ship it"], "V2 row wins, only type=user");
         assert_eq!(b.updated_ms, 900);
         assert_eq!(v[3].updated_ms, 20, "newer V1 row wins for ses_old");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -94,8 +94,31 @@ pub fn ms_of_str(s: &str) -> Option<i64> {
     None
 }
 
+/// A session file found while listing, with the metadata the listing already read
+/// (on Windows a directory listing carries it for free), so it is stat-ed once.
+pub struct Found {
+    pub path: PathBuf,
+    pub md: std::fs::Metadata,
+}
+
+/// `path` if it is a file.
+pub fn stat(path: PathBuf) -> Option<Found> {
+    let md = std::fs::metadata(&path).ok()?;
+    md.is_file().then_some(Found { path, md })
+}
+
+/// Subfolders of `dir` (symlinked folders are not followed).
+pub fn subdirs(dir: &Path) -> impl Iterator<Item = PathBuf> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+}
+
 /// Files below `dir`, down to `depth` levels of subfolders, whose name passes `keep`.
-pub fn walk(dir: &Path, depth: u8, keep: &dyn Fn(&str) -> bool, out: &mut Vec<PathBuf>) {
+pub fn walk(dir: &Path, depth: u8, keep: &dyn Fn(&str) -> bool, out: &mut Vec<Found>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let Ok(ft) = e.file_type() else { continue };
@@ -104,19 +127,32 @@ pub fn walk(dir: &Path, depth: u8, keep: &dyn Fn(&str) -> bool, out: &mut Vec<Pa
                 walk(&e.path(), depth - 1, keep, out);
             }
         } else if ft.is_file() && e.file_name().to_str().is_some_and(keep) {
-            out.push(e.path());
+            if let Ok(md) = e.metadata() {
+                out.push(Found { path: e.path(), md });
+            }
         }
     }
 }
 
+/// Files directly in `dir` whose name passes `keep`.
+pub fn files(dir: &Path, keep: &dyn Fn(&str) -> bool) -> Vec<Found> {
+    let mut out = Vec::new();
+    walk(dir, 0, keep, &mut out);
+    out
+}
+
+/// Files directly in every subfolder of `dir`: `<dir>/*/<file>`.
+pub fn files_in_subdirs(dir: &Path, keep: &dyn Fn(&str) -> bool) -> Vec<Found> {
+    let mut out = Vec::new();
+    for d in subdirs(dir) {
+        walk(&d, 0, keep, &mut out);
+    }
+    out
+}
+
 /// `<dir>/*/<name>`: one folder per session holding a file of a fixed name.
-pub fn per_folder(dir: &Path, name: &str) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
-    rd.flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .map(|e| e.path().join(name))
-        .filter(|p| p.is_file())
-        .collect()
+pub fn per_folder(dir: &Path, name: &str) -> Vec<Found> {
+    subdirs(dir).filter_map(|d| stat(d.join(name))).collect()
 }
 
 /// A `file://` URI (as IDE-side writers store folders) to a plain path:
@@ -156,6 +192,64 @@ fn decode(rest: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Helpers for the readers' tests.
+#[cfg(test)]
+pub mod testing {
+    use super::Found;
+    use std::path::{Path, PathBuf};
+
+    /// A fresh folder under the system temp dir, removed when dropped (also when the
+    /// test fails).
+    pub struct TempDir(PathBuf);
+
+    impl TempDir {
+        pub fn new(name: &str) -> TempDir {
+            let p = std::env::temp_dir().join(format!("chs-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            TempDir(p)
+        }
+    }
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Write `text` to `path`, creating its folders.
+    pub fn put(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// No prompts from a previous run: every database row is read.
+    pub fn fresh(format: crate::config::Format) -> crate::sources::Reuse<'static> {
+        static EMPTY: std::sync::LazyLock<std::collections::HashMap<String, crate::session::Session>> =
+            std::sync::LazyLock::new(Default::default);
+        crate::sources::Reuse::new(&EMPTY, format)
+    }
+
+    pub fn paths(found: Vec<Found>) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = found.into_iter().map(|f| f.path).collect();
+        v.sort();
+        v
+    }
 }
 
 #[cfg(test)]

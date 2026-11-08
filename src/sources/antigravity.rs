@@ -9,21 +9,23 @@
 //!   "workspace", "conversationId"?}` (the id only from CLI 1.3).
 
 use super::common::{jsonl, ms_of_str, uri_to_path};
-use super::sqlite;
+use super::{sqlite, Reuse};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
+pub fn load(root: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> Vec<Session> {
     let db = root.join("conversation_summaries.db");
-    if !db.is_file() {
-        return Vec::new();
+    let mut sessions = sqlite::with_db(&db, |conn| read(conn, &db, limit));
+    // Prompts from the CLI's prompt history - which only grows - for the listed
+    // conversations that changed since the last run, under the usual budget as they
+    // stream past. When none changed, the history is not read at all.
+    let at: HashMap<String, usize> =
+        sessions.iter_mut().enumerate().filter_map(|(i, s)| (!reuse.fill(s)).then(|| (s.id.clone(), i))).collect();
+    if at.is_empty() {
+        return sessions;
     }
-    let mut sessions = read(&db, limit).unwrap_or_default();
-    // Prompts from the CLI's prompt history, kept only for the listed conversations
-    // and under the usual budget as they stream past.
-    let at: HashMap<String, usize> = sessions.iter().enumerate().map(|(i, s)| (s.id.clone(), i)).collect();
     if let Ok(f) = std::fs::File::open(root.join("history.jsonl")) {
         let _ = jsonl::<Value>(std::io::BufReader::new(f), &["\"conversationId\""], |v| {
             let i = v["conversationId"].as_str().and_then(|id| at.get(id));
@@ -35,9 +37,8 @@ pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
     sessions
 }
 
-fn read(db: &Path, limit: usize) -> rusqlite::Result<Vec<Session>> {
-    let conn = sqlite::open(db)?;
-    let cols = sqlite::columns(&conn, "conversation_summaries")?;
+fn read(conn: &rusqlite::Connection, db: &Path, limit: usize) -> rusqlite::Result<Vec<Session>> {
+    let cols = sqlite::columns(conn, "conversation_summaries")?;
     let col = |c: &'static str| sqlite::col_or(&cols, c, "NULL");
     let sql = format!(
         "SELECT conversation_id, {title}, {preview}, {modified}, {workspaces}, {parent}, {app} \
@@ -82,11 +83,12 @@ fn read(db: &Path, limit: usize) -> rusqlite::Result<Vec<Session>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
     use rusqlite::Connection;
 
     #[test]
     fn reads_index_and_history() {
-        let root = std::env::temp_dir().join(format!("chs-agy-{}", std::process::id()));
+        let root = TempDir::new("agy");
         std::fs::create_dir_all(&root).unwrap();
         Connection::open(root.join("conversation_summaries.db"))
             .unwrap()
@@ -115,8 +117,8 @@ mod tests {
             ),
         )
         .unwrap();
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
-        let v = load(&root, &lim, 10);
+        let lim = Limits::TEST;
+        let v = load(&root, &lim, 10, &fresh(crate::config::Format::Antigravity));
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].id, "c2");
         assert_eq!(v[0].entry.as_deref(), Some("subagent"));
@@ -124,6 +126,5 @@ mod tests {
         assert_eq!(v[1].title(), "Fix flaky test");
         assert_eq!(v[1].prompts, vec!["fix the flaky test", "and the other one"]);
         assert!(v[1].updated_ms > 0);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -10,20 +10,17 @@
 //!
 //! `data/db/sessions.db` indexes the same manifests.
 
-use super::common::{ms_of, read_json, str_of, text_of};
+use super::common::{ms_of, read_json, stat, str_of, subdirs, text_of, Found};
 use crate::session::{Limits, Session};
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = std::fs::read_dir(root.join("sessions")) else { return Vec::new() };
-    rd.flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter_map(|e| {
-            let id = e.file_name().into_string().ok()?;
-            let p = e.path().join(format!("{id}.json"));
-            p.is_file().then_some(p)
+pub fn list_files(root: &Path) -> Vec<Found> {
+    subdirs(&root.join("sessions"))
+        .filter_map(|d| {
+            let id = d.file_name()?.to_str()?.to_string();
+            stat(d.join(format!("{id}.json")))
         })
         .collect()
 }
@@ -78,10 +75,11 @@ pub fn parse_file(path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_manifest_and_messages() {
-        let root = std::env::temp_dir().join(format!("chs-cline-{}", std::process::id()));
+        let root = TempDir::new("cline");
         let dir = root.join("sessions/1784094124598_rruoq");
         std::fs::create_dir_all(&dir).unwrap();
         let manifest = dir.join("1784094124598_rruoq.json");
@@ -100,8 +98,8 @@ mod tests {
                 {"id":"m4","role":"user","content":[{"type":"text","text":"add test"}]}]}"#,
         )
         .unwrap();
-        assert_eq!(list_files(&root), vec![manifest.clone()]);
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        assert_eq!(paths(list_files(&root)), vec![manifest.clone()]);
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse_file(&manifest, &mut s, &lim).unwrap();
         assert_eq!(s.id, "1784094124598_rruoq");
@@ -109,6 +107,5 @@ mod tests {
         assert_eq!(s.prompts, vec!["add flag", "add test"]);
         assert_eq!(s.title(), "add flag");
         assert_eq!(s.entry, None);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

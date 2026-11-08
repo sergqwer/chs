@@ -9,23 +9,19 @@
 //!   summaries and system notes are stored as user rows; their fixed prefixes mark them.
 
 use super::common::text_of;
-use super::sqlite;
+use super::{sqlite, Reuse};
 use crate::session::{Limits, Session};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::path::Path;
 
-pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
+pub fn load(root: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> Vec<Session> {
     let db = root.join("state.db");
-    if !db.is_file() {
-        return Vec::new();
-    }
-    read(&db, lim, limit).unwrap_or_default()
+    sqlite::with_db(&db, |conn| read(conn, &db, lim, limit, reuse))
 }
 
-fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>> {
-    let conn = sqlite::open(db)?;
-    let cols = sqlite::columns(&conn, "sessions")?;
+fn read(conn: &Connection, db: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> rusqlite::Result<Vec<Session>> {
+    let cols = sqlite::columns(conn, "sessions")?;
     let has = |c: &str| cols.contains(c);
     let col = |c: &'static str, or: &'static str| sqlite::col_or(&cols, c, or);
     let updated: Vec<&str> =
@@ -65,7 +61,7 @@ fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>>
             })
         })?
         .collect::<Result<_, _>>()?;
-    let mcols = sqlite::columns(&conn, "messages")?;
+    let mcols = sqlite::columns(conn, "messages")?;
     let active = if mcols.contains("active") { "AND COALESCE(active, 1) = 1" } else { "" };
     let sql = format!(
         "SELECT content, {kind}, {meta} FROM messages WHERE session_id = ?1 AND role = 'user' {active} \
@@ -74,13 +70,21 @@ fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>>
         meta = sqlite::col_or(&mcols, "display_metadata", "NULL"),
         order = if mcols.contains("timestamp") { "timestamp, rowid" } else { "rowid" },
     );
-    sessions.into_iter().map(|s| with_prompts(&conn, &sql, s, lim)).collect()
+    sessions
+        .into_iter()
+        .map(|mut s| {
+            if !reuse.fill(&mut s) {
+                prompts(conn, &sql, &mut s, lim)?;
+            }
+            Ok(s)
+        })
+        .collect()
 }
 
 const INJECTED: [&str; 4] =
     ["[CONTEXT COMPACTION", "[CONTEXT SUMMARY]:", "[IMPORTANT: The user has invoked", "[System: "];
 
-fn with_prompts(conn: &Connection, sql: &str, mut s: Session, lim: &Limits) -> rusqlite::Result<Session> {
+fn prompts(conn: &Connection, sql: &str, s: &mut Session, lim: &Limits) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map([&s.id], |r| {
         Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?))
@@ -107,16 +111,17 @@ fn with_prompts(conn: &Connection, sql: &str, mut s: Session, lim: &Limits) -> r
         }
         s.push_prompt(&text, lim);
     }
-    Ok(s)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_state_db() {
-        let root = std::env::temp_dir().join(format!("chs-hermes-{}", std::process::id()));
+        let root = TempDir::new("hermes");
         std::fs::create_dir_all(&root).unwrap();
         Connection::open(root.join("state.db"))
             .unwrap()
@@ -141,14 +146,13 @@ mod tests {
                 "#,
             )
             .unwrap();
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
-        let v = load(&root, &lim, 10);
+        let lim = Limits::TEST;
+        let v = load(&root, &lim, 10, &fresh(crate::config::Format::Hermes));
         let ids: Vec<&str> = v.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["20261108_100000_ab", "20261108_110000_cd"], "archived hidden, newest activity first");
         assert_eq!(v[0].prompts, vec!["why do the tests fail", "fix them"]);
         assert_eq!(v[0].title(), "Fix tests");
         assert_eq!(v[0].started_ms, 1794132000500);
         assert_eq!(v[1].entry.as_deref(), Some("oneshot"));
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

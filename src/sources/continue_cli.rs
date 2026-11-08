@@ -5,15 +5,13 @@
 //! "content"}}]}`. The title stays "Untitled Session" until one is generated, and the
 //! workspace may be a `file://` URI when the IDE wrote it.
 
-use super::common::{read_json, str_of, text_of, uri_to_path, walk};
+use super::common::{files, read_json, str_of, text_of, uri_to_path, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk(&root.join("sessions"), 0, &|n| n.ends_with(".json") && n != "sessions.json", &mut out);
-    out
+pub fn list_files(root: &Path) -> Vec<Found> {
+    files(&root.join("sessions"), &|n| n.ends_with(".json") && n != "sessions.json")
 }
 
 pub fn parse_file(path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result<()> {
@@ -33,10 +31,11 @@ pub fn parse_file(path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_session_file() {
-        let dir = std::env::temp_dir().join(format!("chs-cn-{}", std::process::id()));
+        let dir = TempDir::new("cn");
         std::fs::create_dir_all(dir.join("sessions")).unwrap();
         let f = dir.join("sessions/7c1e.json");
         std::fs::write(
@@ -48,14 +47,13 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join("sessions/sessions.json"), "[]").unwrap();
-        assert_eq!(list_files(&dir), vec![f.clone()]);
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        assert_eq!(paths(list_files(&dir)), vec![f.clone()]);
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse_file(&f, &mut s, &lim).unwrap();
         assert_eq!(s.id, "7c1e");
         assert_eq!(s.cwd, "/home/u/my proj");
         assert_eq!(s.custom_title, None);
         assert_eq!(s.prompts, vec!["add a --verbose flag", "now add a test"]);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

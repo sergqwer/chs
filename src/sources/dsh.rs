@@ -11,25 +11,14 @@
 //! * `session/title`: `data.title`, from the provider, the user or a fallback (the
 //!   first prompt).
 
-use super::common::{jsonl, ms_of, str_of, text_of};
+use super::common::{jsonl, ms_of, stat, str_of, subdirs, text_of, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for project in std::fs::read_dir(root).into_iter().flatten().flatten() {
-        if !project.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        for session in std::fs::read_dir(project.path()).into_iter().flatten().flatten() {
-            if session.file_type().is_ok_and(|t| t.is_dir()) {
-                out.extend(latest(&session.path()));
-            }
-        }
-    }
-    out
+pub fn list_files(root: &Path) -> Vec<Found> {
+    subdirs(root).flat_map(|project| subdirs(&project)).filter_map(|d| latest(&d).and_then(stat)).collect()
 }
 
 /// `session.jsonl` is generation 0, `session.v4.jsonl.zstd` generation 4.
@@ -124,6 +113,7 @@ fn apply(v: &Value, s: &mut Session, lim: &Limits) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     const LOG: [&str; 6] = [
         r#"{"type":"session","version":4,"id":"session-3f6c","createdAt":1794045600000,"cwd":"/home/u/proj","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}"#,
@@ -140,14 +130,13 @@ mod tests {
         assert_eq!(generation("session.v4.jsonl.zstd"), Some(4));
         assert_eq!(generation("session.lock"), None);
         assert_eq!(generation("session.migration.1.tmp"), None);
-        let root = std::env::temp_dir().join(format!("chs-dsh-l-{}", std::process::id()));
+        let root = TempDir::new("dsh-l");
         let dir = root.join("--home-u-proj--/session-3f6c");
         std::fs::create_dir_all(&dir).unwrap();
         for f in ["session.v3.jsonl.zstd", "session.v4.jsonl.zstd", "session.lock"] {
             std::fs::write(dir.join(f), "").unwrap();
         }
-        assert_eq!(list_files(&root), vec![dir.join("session.v4.jsonl.zstd")]);
-        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(paths(list_files(&root)), vec![dir.join("session.v4.jsonl.zstd")]);
     }
 
     #[test]
@@ -161,18 +150,17 @@ mod tests {
         }
         let torn = compress_to_vec(&b"{\"type\":\"user/message\",\"data\":{}}\n"[..], CompressionLevel::Fastest);
         bytes.extend(&torn[..torn.len() / 2]);
-        let dir = std::env::temp_dir().join(format!("chs-dsh-z-{}", std::process::id()));
+        let dir = TempDir::new("dsh-z");
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("session.v4.jsonl.zstd");
         std::fs::write(&f, &bytes).unwrap();
         assert!(!incremental(&f));
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse_file(&f, &mut s, &lim).unwrap();
         assert_eq!(s.id, "session-3f6c");
         assert_eq!(s.cwd, "/home/u/proj");
         assert_eq!(s.prompts, vec!["fix the flaky parser test", "now add a regression test"]);
         assert_eq!(s.title(), "Flaky parser test");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

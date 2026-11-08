@@ -9,15 +9,15 @@
 //! * 2.x: `session_<time>_<id8>/meta.json` with an append-only `messages.jsonl`
 //!   (`{"role", "content", "injected"}` lines) whose user lines are the prompts.
 
-use super::common::{jsonl, ms_of, read_json, str_of, text_of};
+use super::common::{jsonl, ms_of, per_folder, read_json, str_of, text_of, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = super::common::per_folder(&root.join("unified"), "meta.json");
-    out.extend(super::common::per_folder(root, "meta.json"));
+pub fn list_files(root: &Path) -> Vec<Found> {
+    let mut out = per_folder(&root.join("unified"), "meta.json");
+    out.extend(per_folder(root, "meta.json"));
     out
 }
 
@@ -57,10 +57,11 @@ pub fn parse_file(meta: &Path, s: &mut Session, lim: &Limits) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_both_layouts() {
-        let root = std::env::temp_dir().join(format!("chs-vibe-{}", std::process::id()));
+        let root = TempDir::new("vibe");
         let new = root.join("unified/b7e1");
         let old = root.join("session_20260301_100000_a1b2c3d4");
         std::fs::create_dir_all(&new).unwrap();
@@ -76,7 +77,7 @@ mod tests {
         .unwrap();
         let files = list_files(&root);
         assert_eq!(files.len(), 2);
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let mut a = Session::default();
         parse_file(&new.join("meta.json"), &mut a, &lim).unwrap();
         assert_eq!((a.id.as_str(), a.cwd.as_str()), ("b7e1", "/home/u/proj"));
@@ -84,6 +85,5 @@ mod tests {
         let mut b = Session::default();
         parse_file(&old.join("meta.json"), &mut b, &lim).unwrap();
         assert_eq!(b.prompts, vec!["list the files here"]);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

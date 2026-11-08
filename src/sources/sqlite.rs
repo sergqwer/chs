@@ -8,6 +8,15 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
+/// Run `f` on the database file `db` if it exists; a database that can not be read
+/// (locked past the timeout, an unknown schema) yields nothing.
+pub fn with_db<T>(db: &Path, f: impl FnOnce(&Connection) -> rusqlite::Result<Vec<T>>) -> Vec<T> {
+    if !db.is_file() {
+        return Vec::new();
+    }
+    open(db).and_then(|c| f(&c)).unwrap_or_default()
+}
+
 pub fn open(db: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     conn.busy_timeout(Duration::from_millis(800))?;

@@ -10,23 +10,19 @@
 //!   results are stored with role "user" too, so only `{"type":"text"}` parts of
 //!   messages the user could see (`metadata_json.userVisible` != false) count.
 
-use super::sqlite;
+use super::{sqlite, Reuse};
 use crate::session::{Limits, Session};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::path::Path;
 
-pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
+pub fn load(root: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> Vec<Session> {
     let db = root.join("sessions").join("sessions.db");
-    if !db.is_file() {
-        return Vec::new();
-    }
-    read(&db, lim, limit).unwrap_or_default()
+    sqlite::with_db(&db, |conn| read(conn, &db, lim, limit, reuse))
 }
 
-fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>> {
-    let conn = sqlite::open(db)?;
-    let cols = sqlite::columns(&conn, "sessions")?;
+fn read(conn: &Connection, db: &Path, lim: &Limits, limit: usize, reuse: &Reuse) -> rusqlite::Result<Vec<Session>> {
+    let cols = sqlite::columns(conn, "sessions")?;
     let name = sqlite::col_or(&cols, "name", "''");
     let description = sqlite::col_or(&cols, "description", "''");
     let kind = sqlite::col_or(&cols, "session_type", "'user'");
@@ -55,10 +51,18 @@ fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>>
             })
         })?
         .collect::<Result<_, _>>()?;
-    sessions.into_iter().map(|s| with_prompts(&conn, s, lim)).collect()
+    sessions
+        .into_iter()
+        .map(|mut s| {
+            if !reuse.fill(&mut s) {
+                prompts(conn, &mut s, lim)?;
+            }
+            Ok(s)
+        })
+        .collect()
 }
 
-fn with_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite::Result<Session> {
+fn prompts(conn: &Connection, s: &mut Session, lim: &Limits) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(
         "SELECT content_json, metadata_json FROM messages WHERE session_id = ?1 AND role = 'user' ORDER BY id",
     )?;
@@ -68,7 +72,7 @@ fn with_prompts(conn: &Connection, mut s: Session, lim: &Limits) -> rusqlite::Re
             s.push_prompt(&t, lim);
         }
     }
-    Ok(s)
+    Ok(())
 }
 
 fn user_text(content: &str, meta: Option<&str>) -> Option<String> {
@@ -89,11 +93,11 @@ fn user_text(content: &str, meta: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_sessions() {
-        let root = std::env::temp_dir().join(format!("chs-goose-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = TempDir::new("goose");
         std::fs::create_dir_all(root.join("sessions")).unwrap();
         Connection::open(root.join("sessions/sessions.db"))
             .unwrap()
@@ -116,8 +120,8 @@ mod tests {
                 "#,
             )
             .unwrap();
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
-        let v = load(&root, &lim, 10);
+        let lim = Limits::TEST;
+        let v = load(&root, &lim, 10, &fresh(crate::config::Format::Goose));
         let ids: Vec<&str> = v.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["20261108_2", "20261108_1"], "RFC 3339 and plain timestamps both sort; archived hidden");
         assert_eq!(v[1].prompts, vec!["why is the build red", "fix it"]);
@@ -126,6 +130,5 @@ mod tests {
         assert_eq!(v[0].entry.as_deref(), Some("sub_agent"));
         let expect = chrono::DateTime::parse_from_rfc3339("2026-11-08T11:00:00Z").unwrap().timestamp_millis();
         assert_eq!(v[1].updated_ms, expect, "naive timestamps are UTC");
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

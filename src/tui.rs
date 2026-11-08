@@ -55,7 +55,8 @@ pub fn run(cfg: &Config, t: &Strings, opts: Options) -> Result<Outcome> {
 
 struct Row {
     session: usize,
-    prompt: Option<usize>,
+    /// The prompt that matched best, found when the row is first previewed.
+    prompt: std::cell::OnceCell<Option<usize>>,
 }
 
 struct Theme {
@@ -71,7 +72,7 @@ struct Theme {
     sources: Vec<Color>,
 }
 
-fn color(s: &str) -> Option<Color> {
+pub fn color(s: &str) -> Option<Color> {
     let s = s.trim();
     if s.is_empty() || s.eq_ignore_ascii_case("reset") {
         None
@@ -164,7 +165,7 @@ impl<'a> App<'a> {
     fn load(&mut self, ignore_cache: bool) {
         match index::load(self.cfg, ignore_cache) {
             Ok(l) => {
-                self.titles = l.sessions.iter().map(Session::title).collect();
+                self.titles = l.titles;
                 self.sessions = l.sessions;
             }
             Err(e) => self.message = Some(format!("{e:#}")),
@@ -174,33 +175,25 @@ impl<'a> App<'a> {
     }
 
     fn refilter(&mut self) {
-        let cfg = self.cfg;
-        self.pool = self
-            .sessions
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| {
-                let Some(si) = cfg.sources.iter().position(|c| c.name == s.source) else { return false };
-                self.source_filter.is_none_or(|f| f == si)
-                    && (!s.headless || self.show_headless || cfg.sources[si].include_headless)
-            })
-            .map(|(i, _)| i)
-            .take(cfg.general.search_pool)
-            .collect();
+        self.pool = index::pool(self.cfg, &self.sessions, self.source_filter, self.show_headless);
         self.research();
     }
 
     fn research(&mut self) {
         self.parsed = self.searcher.parse(&self.query);
         self.rows = if self.parsed.is_empty() {
-            self.pool.iter().take(self.cfg.general.recent_count).map(|&i| Row { session: i, prompt: None }).collect()
+            self.pool
+                .iter()
+                .take(self.cfg.general.recent_count)
+                .map(|&i| Row { session: i, prompt: Default::default() })
+                .collect()
         } else {
             let refs: Vec<(&Session, &str)> =
                 self.pool.iter().map(|&i| (&self.sessions[i], self.titles[i].as_str())).collect();
             self.searcher
                 .search(&self.parsed, &refs, self.cfg.general.result_count)
                 .into_iter()
-                .map(|h| Row { session: self.pool[h.idx], prompt: h.prompt })
+                .map(|h| Row { session: self.pool[h.idx], prompt: Default::default() })
                 .collect()
         };
         self.list.select(if self.rows.is_empty() { None } else { Some(0) });
@@ -311,7 +304,7 @@ impl<'a> App<'a> {
                     let n = self.cfg.sources.len();
                     // None (all) -> 0 -> 1 -> ... -> n-1 -> None, skipping sources that
                     // have no sessions at all (most of the built-in list, for most people).
-                    let has = |i: usize| self.sessions.iter().any(|s| s.source == self.cfg.sources[i].name);
+                    let has = |i: usize| self.sessions.iter().any(|s| s.src == i);
                     let mut pos = self.source_filter.map(|i| i + 1).unwrap_or(0);
                     for _ in 0..=n {
                         pos = if action == Action::NextSource { (pos + 1) % (n + 1) } else { (pos + n) % (n + 1) };
@@ -468,10 +461,10 @@ impl<'a> App<'a> {
         let date_w = self.date_width();
         let now = Local::now().timestamp_millis();
         let mut items = Vec::with_capacity(self.rows.len());
-        let rows: Vec<(usize, Option<usize>)> = self.rows.iter().map(|r| (r.session, r.prompt)).collect();
-        for (si, _) in rows {
+        let rows: Vec<usize> = self.rows.iter().map(|r| r.session).collect();
+        for si in rows {
             let s = &self.sessions[si];
-            let src_idx = self.cfg.sources.iter().position(|c| c.name == s.source).unwrap_or(0);
+            let src_idx = s.src;
             let mut used = sym_w;
             let mut spans: Vec<Span> = Vec::new();
             for (ci, col) in d.columns.iter().enumerate() {
@@ -558,13 +551,14 @@ impl<'a> App<'a> {
     fn draw_preview(&mut self, f: &mut Frame, area: Rect) {
         let Some(idx) = self.list.selected() else { return };
         let Some(row) = self.rows.get(idx) else { return };
-        let (si, hit_prompt) = (row.session, row.prompt);
+        let si = row.session;
         let s = &self.sessions[si];
+        let hit_prompt = *row.prompt.get_or_init(|| self.searcher.best_prompt(&self.parsed, s));
         let d = &self.cfg.display;
         let th = &self.theme;
         let t = self.t;
         let label = |k: &str| Span::styled(format!("{k}: "), th.help);
-        let src_idx = self.cfg.sources.iter().position(|c| c.name == s.source).unwrap_or(0);
+        let src_idx = s.src;
         let mut lines: Vec<Line> = Vec::new();
 
         let mut head =

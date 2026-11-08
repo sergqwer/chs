@@ -9,13 +9,13 @@
 //!
 //! Entries form a tree (branches live in the same file); every user message counts.
 
-use super::common::{jsonl, ms_of, str_of, text_of, walk};
+use super::common::{jsonl, ms_of, str_of, text_of, walk, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
+pub fn list_files(root: &Path) -> Vec<Found> {
     let mut out = Vec::new();
     // `--session-dir` folders are flat; the default one has a folder per cwd.
     walk(&root.join("sessions"), 1, &|n| n.ends_with(".jsonl"), &mut out);
@@ -68,7 +68,7 @@ mod tests {
             "",
         ]
         .join("\n");
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let mut s = Session::default();
         let n = parse(text.as_bytes(), &mut s, &lim).unwrap();
         assert_eq!(n as usize, text.len());

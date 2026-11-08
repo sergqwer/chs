@@ -5,33 +5,17 @@
 //! `UserMessage` item (newer ones); raw `response_item` user messages are kept as a
 //! fallback because they also carry injected context blocks that have to be filtered.
 
+use super::common::{jsonl, walk, Found};
 use crate::session::{parse_ts, Limits, Session};
-use memchr::memmem;
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
+pub fn list_files(root: &Path) -> Vec<Found> {
     let mut out = Vec::new();
-    walk(&root.join("sessions"), 0, &mut out);
+    walk(&root.join("sessions"), 4, &|n| n.starts_with("rollout-") && n.ends_with(".jsonl"), &mut out);
     out
-}
-
-fn walk(dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let Ok(ft) = e.file_type() else { continue };
-        let p = e.path();
-        if ft.is_dir() && depth < 4 {
-            walk(&p, depth + 1, out);
-        } else if ft.is_file()
-            && p.extension().is_some_and(|x| x == "jsonl")
-            && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("rollout-"))
-        {
-            out.push(p);
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -44,27 +28,20 @@ struct Line {
 
 // Quoted values only, so JSON spacing around ':' does not matter; the role needle
 // comes in both spellings for the same reason.
-const NEEDLES: [&[u8]; 5] =
-    [b"\"session_meta\"", b"\"user_message\"", b"\"UserMessage\"", b"\"role\":\"user\"", b"\"role\": \"user\""];
+const NEEDLES: [&str; 5] =
+    ["\"session_meta\"", "\"user_message\"", "\"UserMessage\"", "\"role\":\"user\"", "\"role\": \"user\""];
 
-pub fn parse(mut reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
-    let finders: Vec<memmem::Finder> = NEEDLES.iter().map(memmem::Finder::new).collect();
-    let mut buf = Vec::with_capacity(64 * 1024);
-    let mut consumed = 0u64;
-    loop {
-        buf.clear();
-        let n = reader.read_until(b'\n', &mut buf)?;
-        if n == 0 || buf.last() != Some(&b'\n') {
-            break;
-        }
-        consumed += n as u64;
-        if !finders.iter().any(|f| f.find(&buf).is_some()) {
-            continue;
-        }
-        let Ok(line) = serde_json::from_slice::<Line>(&buf) else { continue };
-        apply(line, s, lim);
-    }
-    Ok(consumed)
+pub fn parse(reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Result<u64> {
+    jsonl::<Line>(reader, &NEEDLES, |line| apply(line, s, lim))
+}
+
+/// A prompt from the explicit user-message events: once there is one, the raw
+/// response-item fallback is never needed, so it is dropped instead of being cached
+/// as a second copy of the same text.
+fn push_event_prompt(s: &mut Session, text: &str, lim: &Limits) {
+    s.push_prompt(text, lim);
+    s.alt_prompts.clear();
+    s.alt_chars = 0;
 }
 
 fn apply(line: Line, s: &mut Session, lim: &Limits) {
@@ -102,25 +79,23 @@ fn apply(line: Line, s: &mut Session, lim: &Limits) {
         }
         "event_msg" => match p.get("type").and_then(Value::as_str) {
             Some("user_message") => {
-                if let Some(m) = p.get("message").and_then(Value::as_str) {
-                    if let Some(t) = clean_prompt(m) {
-                        s.push_prompt(&t, lim);
-                    }
+                if let Some(t) = p.get("message").and_then(Value::as_str).and_then(clean_prompt) {
+                    push_event_prompt(s, &t, lim);
                 }
             }
             Some("item_completed") => {
                 let item = &p["item"];
                 if item.get("type").and_then(Value::as_str) == Some("UserMessage") {
-                    let text = join_text(&item["content"]);
-                    if let Some(t) = clean_prompt(&text) {
-                        s.push_prompt(&t, lim);
+                    if let Some(t) = clean_prompt(&join_text(&item["content"])) {
+                        push_event_prompt(s, &t, lim);
                     }
                 }
             }
             _ => {}
         },
         "response_item"
-            if p.get("type").and_then(Value::as_str) == Some("message")
+            if s.prompts.is_empty()
+                && p.get("type").and_then(Value::as_str) == Some("message")
                 && p.get("role").and_then(Value::as_str) == Some("user") =>
         {
             for part in p["content"].as_array().into_iter().flatten() {
@@ -181,7 +156,7 @@ pub fn finish(s: &mut Session, lim: &Limits) {
 mod tests {
     use super::*;
 
-    const LIM: Limits = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+    const LIM: Limits = Limits::TEST;
 
     fn run(lines: &[&str]) -> Session {
         let data = lines.iter().map(|l| format!("{l}\n")).collect::<String>();

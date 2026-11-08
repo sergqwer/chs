@@ -6,16 +6,16 @@
 //! `llm_message.content`; context the CLI attaches goes to `extended_content` and is
 //! not part of it. There is no title: like the CLI itself, the first prompt is used.
 
-use super::common::{ms_of, read_json, str_of, text_of};
+use super::common::{ms_of, per_folder, read_json, str_of, text_of, Found};
 use crate::session::{Limits, Session};
 use memchr::memmem;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
+pub fn list_files(root: &Path) -> Vec<Found> {
     // `$OPENHANDS_CONVERSATIONS_DIR` points at the conversations folder itself.
     let conv = root.join("conversations");
-    super::common::per_folder(if conv.is_dir() { &conv } else { root }, "base_state.json")
+    per_folder(if conv.is_dir() { &conv } else { root }, "base_state.json")
 }
 
 /// A new event is a new file, which changes the folder's mtime; the newest event
@@ -76,10 +76,11 @@ pub fn parse_file(path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
 
     #[test]
     fn reads_conversation() {
-        let root = std::env::temp_dir().join(format!("chs-oh-{}", std::process::id()));
+        let root = TempDir::new("oh");
         let conv = root.join("conversations/3f2a00aa");
         std::fs::create_dir_all(conv.join("events")).unwrap();
         let state = conv.join("base_state.json");
@@ -104,14 +105,13 @@ mod tests {
         let late = conv.join("events/event-100000-z.json");
         std::fs::write(&late, r#"{"kind":"MessageEvent","source":"user","llm_message":{"content":[{"type":"text","text":"much later"}]}}"#).unwrap();
         assert_eq!(companions(&state)[0], late);
-        assert_eq!(list_files(&root), vec![state.clone()]);
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        assert_eq!(paths(list_files(&root)), vec![state.clone()]);
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse_file(&state, &mut s, &lim).unwrap();
         assert_eq!(s.id, "3f2a00aa");
         assert_eq!(s.cwd, "/home/u/p");
         assert_eq!(s.prompts, vec!["add flag", "add test", "much later"]);
         assert!(s.started_ms > 0);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

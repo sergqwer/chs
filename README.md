@@ -189,9 +189,15 @@ and set `language_file = "~/.config/chs/uk.toml"` in `[general]`. Missing keys s
   last run stopped; whole-file formats are re-read when they or their companion files change; SQLite
   databases are opened read-only and asked for the newest rows. The index lives in
   `~/.cache/chs/index.json` (`%LOCALAPPDATA%\chs` on Windows).
+- The work stays bounded however many sessions pile up. Files are read newest first, and a source stops
+  being read once it has `search_pool` sessions to show. Sessions beyond that window, such as a long
+  tail of headless runs, are kept in the index as a one-line stub, so they are neither parsed again nor
+  grown in memory. Each session keeps at most `max_indexed_chars` of prompt text. Database rows whose
+  update time has not changed reuse the prompts read last time.
 - Search: [nucleo](https://github.com/helix-editor/nucleo) fuzzy matching per word, scored against each
   field separately; each score is normalised by the word's perfect score and has to stay within about one
-  word of text, so letters scattered across a long prompt do not count as a match.
+  word of text, so letters scattered across a long prompt do not count as a match. Prompts are converted
+  to the matcher's form once per run, not on every key.
 
 ## License
 

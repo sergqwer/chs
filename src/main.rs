@@ -155,20 +155,16 @@ fn uninstall(cfg: &Config, t: &Strings) -> Vec<String> {
 /// Non-interactive output, for scripts and for `chs | grep`.
 fn list(cfg: &Config, cli: &Cli, query: &str) -> Result<()> {
     let loaded = index::load(cfg, false)?;
-    let pool: Vec<&Session> = loaded
-        .sessions
-        .iter()
-        .filter(|s| cli.source.as_ref().is_none_or(|n| *n == s.source))
-        .filter(|s| !s.headless || cli.all || cfg.source(&s.source).is_some_and(|c| c.include_headless))
-        .take(cfg.general.search_pool)
-        .collect();
-    let titles: Vec<String> = pool.iter().map(|s| s.title()).collect();
+    let source = cli.source.as_ref().and_then(|n| cfg.sources.iter().position(|s| s.name == *n));
+    let idx = index::pool(cfg, &loaded.sessions, source, cli.all);
+    let pool: Vec<&Session> = idx.iter().map(|&i| &loaded.sessions[i]).collect();
+    let titles: Vec<&str> = idx.iter().map(|&i| loaded.titles[i].as_str()).collect();
     let picked: Vec<usize> = if query.trim().is_empty() {
         (0..pool.len().min(cli.limit.unwrap_or(cfg.general.recent_count))).collect()
     } else {
         let mut searcher = search::Searcher::new(&cfg.search);
         let q = searcher.parse(query);
-        let refs: Vec<(&Session, &str)> = pool.iter().zip(&titles).map(|(s, t)| (*s, t.as_str())).collect();
+        let refs: Vec<(&Session, &str)> = pool.iter().zip(&titles).map(|(s, t)| (*s, *t)).collect();
         searcher.search(&q, &refs, cli.limit.unwrap_or(cfg.general.result_count)).into_iter().map(|h| h.idx).collect()
     };
 
@@ -196,27 +192,45 @@ fn list(cfg: &Config, cli: &Cli, query: &str) -> Result<()> {
         let s = pool[i];
         let src = tui::fit(&s.source, d.source_width as usize);
         let src = format!("{src:<w$}", w = d.source_width as usize);
-        let src = match (color, cfg.source(&s.source).and_then(|c| hex(&c.color))) {
-            (true, Some((r, g, b))) => format!("\x1b[1;38;2;{r};{g};{b}m{src}\x1b[0m"),
-            _ => src,
+        let src = match tui::color(&cfg.sources[s.src].color).and_then(ansi_fg).filter(|_| color) {
+            Some(fg) => format!("\x1b[1;{fg}m{src}\x1b[0m"),
+            None => src,
         };
         let folder = tui::fit(&tui::folder(&s.cwd, d.folder_style), d.folder_width as usize);
         println!(
             "{src} {}  {folder:<fw$}  {}{}",
             tui::format_ts(s.updated_ms, &d.date_format),
             if s.headless { format!("{} ", d.headless_tag) } else { String::new() },
-            tui::fit(&titles[i], 160),
+            tui::fit(titles[i], 160),
             fw = d.folder_width as usize
         );
     }
     Ok(())
 }
 
-fn hex(s: &str) -> Option<(u8, u8, u8)> {
-    let h = s.strip_prefix('#')?;
-    if h.len() != 6 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
+/// The SGR parameters for a foreground color, the same colors the TUI accepts.
+fn ansi_fg(c: ratatui::style::Color) -> Option<String> {
+    use ratatui::style::Color::*;
+    let basic = |n: u8| Some(n.to_string());
+    match c {
+        Rgb(r, g, b) => Some(format!("38;2;{r};{g};{b}")),
+        Indexed(i) => Some(format!("38;5;{i}")),
+        Black => basic(30),
+        Red => basic(31),
+        Green => basic(32),
+        Yellow => basic(33),
+        Blue => basic(34),
+        Magenta => basic(35),
+        Cyan => basic(36),
+        Gray => basic(37),
+        DarkGray => basic(90),
+        LightRed => basic(91),
+        LightGreen => basic(92),
+        LightYellow => basic(93),
+        LightBlue => basic(94),
+        LightMagenta => basic(95),
+        LightCyan => basic(96),
+        White => basic(97),
+        Reset => None,
     }
-    let p = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
-    Some((p(0)?, p(2)?, p(4)?))
 }

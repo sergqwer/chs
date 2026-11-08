@@ -11,13 +11,13 @@
 //! model-only messages are skipped; `userMessageSource` tells a person (`cli_tui`,
 //! `desktop`, `web`) from `droid exec` (`cli_exec`) and automations.
 
-use super::common::{jsonl, ms_of, str_of, text_of, walk};
+use super::common::{jsonl, ms_of, str_of, text_of, walk, Found};
 use crate::session::{Limits, Session};
 use serde_json::Value;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn list_files(root: &Path) -> Vec<PathBuf> {
+pub fn list_files(root: &Path) -> Vec<Found> {
     let mut out = Vec::new();
     walk(&root.join("sessions"), 1, &|n| n.ends_with(".jsonl"), &mut out);
     out
@@ -31,7 +31,12 @@ pub fn parse(reader: impl BufRead, s: &mut Session, lim: &Limits) -> std::io::Re
 
 pub fn parse_file(path: &Path, s: &mut Session, lim: &Limits) -> std::io::Result<()> {
     let f = std::fs::File::open(path)?;
-    parse(std::io::BufReader::with_capacity(256 * 1024, f), s, lim).map(|_| ())
+    parse(std::io::BufReader::with_capacity(256 * 1024, f), s, lim)?;
+    // `/btw` side chats are kept apart from real sessions.
+    if s.entry.is_none() && path.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "btw") {
+        s.entry = Some("btw".into());
+    }
+    Ok(())
 }
 
 fn apply(v: &Value, s: &mut Session, lim: &Limits) {
@@ -82,14 +87,6 @@ fn apply(v: &Value, s: &mut Session, lim: &Limits) {
     }
 }
 
-/// `/btw` side chats are kept apart from real sessions.
-pub fn finish(s: &mut Session) {
-    let side = s.file.parent().and_then(|p| p.file_name()).is_some_and(|n| n == "btw");
-    if side && s.entry.is_none() {
-        s.entry = Some("btw".into());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,7 +103,7 @@ mod tests {
             "",
         ]
         .join("\n");
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let mut s = Session::default();
         parse(text.as_bytes(), &mut s, &lim).unwrap();
         assert_eq!(s.id, "2b1e");

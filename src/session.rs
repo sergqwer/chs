@@ -10,6 +10,12 @@ pub struct Limits {
     pub max_indexed_chars: usize,
 }
 
+#[cfg(test)]
+impl Limits {
+    /// The default budget, for tests.
+    pub const TEST: Limits = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+}
+
 /// When a session exceeds `max_indexed_chars`, this many opening prompts are always
 /// kept; the rest of the budget goes to the most recent ones.
 const KEEP_HEAD: usize = 5;
@@ -46,6 +52,13 @@ pub struct Session {
     /// Computed from `entry` and the source's config every load; never cached.
     #[serde(skip)]
     pub headless: bool,
+    /// Index of the source in `Config::sources`, set on every load.
+    #[serde(skip)]
+    pub src: usize,
+    /// `prompts` as the matcher reads them, made by the first search that reaches
+    /// this session. Lives with the prompts, so a reloaded list starts without it.
+    #[serde(skip)]
+    pub decoded: std::sync::OnceLock<Box<[crate::search::Decoded]>>,
 }
 
 impl Session {
@@ -61,7 +74,11 @@ impl Session {
 
     /// Something worth listing: a resumable id and at least a prompt or a title.
     pub fn is_useful(&self) -> bool {
-        !self.id.is_empty() && (!self.prompts.is_empty() || self.custom_title.is_some() || self.ai_title.is_some())
+        !self.id.is_empty() && self.has_content()
+    }
+
+    pub fn has_content(&self) -> bool {
+        !self.prompts.is_empty() || self.custom_title.is_some() || self.ai_title.is_some()
     }
 
     pub fn push_prompt(&mut self, text: &str, lim: &Limits) {
@@ -91,8 +108,6 @@ fn push_capped(list: &mut Vec<String>, chars: &mut usize, text: &str, lim: &Limi
     }
     true
 }
-
-impl Session {}
 
 /// Collapse all whitespace (newlines included) into single spaces.
 pub fn one_line(s: &str) -> String {

@@ -13,15 +13,11 @@ use std::path::Path;
 
 pub fn load(root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
     let db = root.join("data.sqlite3");
-    if !db.is_file() {
-        return Vec::new();
-    }
-    read(&db, lim, limit).unwrap_or_default()
+    sqlite::with_db(&db, |conn| read(conn, &db, lim, limit))
 }
 
-fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>> {
-    let conn = sqlite::open(db)?;
-    if !sqlite::tables(&conn)?.contains("conversations") {
+fn read(conn: &rusqlite::Connection, db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>> {
+    if !sqlite::tables(conn)?.contains("conversations") {
         return Ok(Vec::new());
     }
     let mut stmt = conn.prepare("SELECT key, value FROM conversations")?;
@@ -68,11 +64,12 @@ fn read(db: &Path, lim: &Limits, limit: usize) -> rusqlite::Result<Vec<Session>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::common::testing::*;
     use rusqlite::Connection;
 
     #[test]
     fn reads_conversations() {
-        let root = std::env::temp_dir().join(format!("chs-q-{}", std::process::id()));
+        let root = TempDir::new("q");
         std::fs::create_dir_all(&root).unwrap();
         let value = serde_json::json!({
             "conversation_id": "c-1",
@@ -87,13 +84,12 @@ mod tests {
         conn.execute_batch("CREATE TABLE conversations (key TEXT PRIMARY KEY, value TEXT)").unwrap();
         conn.execute("INSERT INTO conversations VALUES (?1, ?2)", ["/home/u/proj", &value.to_string()]).unwrap();
         drop(conn);
-        let lim = Limits { max_prompt_chars: 4000, max_indexed_chars: 40000 };
+        let lim = Limits::TEST;
         let v = load(&root, &lim, 10);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].id, "c-1");
         assert_eq!(v[0].cwd, "/home/u/proj");
         assert_eq!(v[0].prompts, vec!["list the files", "add a README"]);
         assert!(v[0].updated_ms > v[0].started_ms);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }
