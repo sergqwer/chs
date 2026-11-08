@@ -1,0 +1,220 @@
+# chs — configuration
+#
+# This file is created on first run with every option and its default value.
+# Anything you delete falls back to the built-in default (this very template,
+# embedded in the binary), so you can also keep only the lines you change.
+#
+#   chs --config-path        where this file lives
+#   chs --init-config        rewrite it with defaults (add --force to overwrite)
+#   chs --dump-lang          print every UI string, as a starting point for a translation
+#
+# Paths accept `~` and environment variables written as ${VAR} or %VAR%.
+
+[general]
+# Sessions shown before you type anything.
+recent_count = 20
+# How many of the most recent sessions the search looks through.
+search_pool = 200
+# How many best matches are shown while searching.
+result_count = 20
+# Translation file (TOML). Empty = built-in English.
+# Start one with `chs --dump-lang > ~/.config/chs/uk.toml`, translate the values,
+# then point this at it. Missing keys fall back to English. No rebuild needed.
+language_file = ""
+# Where the session index is cached. Empty = the OS cache folder
+# (~/.cache/chs on Linux, %LOCALAPPDATA%\chs on Windows).
+cache_dir = ""
+# What happens when you pick a session:
+#   "exit"   - chs gets out of the way: the session takes over this terminal and chs
+#              is gone (on Linux/macOS the chs process is replaced, it keeps no memory).
+#   "return" - when the resumed session ends, you come back to the chs list.
+after_resume = "exit"
+# The session's folder no longer exists: "home" (resume from your home folder),
+# "current" (from the folder chs was started in) or "abort" (show an error).
+missing_cwd = "home"
+# Esc first clears the search; a second Esc quits. false = Esc always quits.
+esc_clears_query = true
+
+[display]
+# Columns in the list, left to right. Available: "source", "date", "folder", "title".
+columns = ["source", "date", "folder", "title"]
+# strftime format for the date column (see https://docs.rs/chrono/latest/chrono/format/strftime).
+date_format = "%Y-%m-%d %H:%M"
+# Show "5m", "3h", "2d" instead of the date for sessions newer than a week.
+relative_dates = false
+# Folder column: "name" (last path component), "tilde" (~/projects/x), "full".
+folder_style = "name"
+folder_width = 22
+source_width = 9
+# Mark sessions that were run non-interactively (claude -p, codex exec, ...).
+show_headless_tag = true
+headless_tag = "⚙"
+# Symbol in front of the selected row.
+highlight_symbol = "▶ "
+# Frame style: "rounded", "plain", "double", "thick", "none".
+border = "rounded"
+# Preview panel with the session's details and first/last prompts.
+preview = true
+# "right", "bottom" or "auto" (right when the terminal is at least preview_auto_width wide).
+preview_position = "auto"
+preview_auto_width = 140
+# Share of the screen the preview takes, in percent.
+preview_size = 45
+# How many of the first and of the last prompts the preview shows.
+preview_first_prompts = 3
+preview_last_prompts = 2
+# Characters of each prompt shown in the preview.
+preview_prompt_chars = 400
+# Key hints at the bottom.
+show_help = true
+# 0 = full screen. Any other number = draw inline below the prompt using that many
+# rows, like `fzf --height`, leaving your scrollback visible.
+height = 0
+
+[search]
+# Weight of each field in the ranking.
+weight_title = 3.0
+weight_folder = 2.0
+weight_prompts = 1.0
+# "smart" (case-insensitive unless you type a capital), "ignore", "respect".
+case = "smart"
+# Treat letters with diacritics as their base letter (é ≈ e).
+normalize = true
+# 0.0-1.0. Fuzzy matches weaker than this share of a perfect match are dropped,
+# so stray letters scattered through a long prompt do not count as a hit.
+min_quality = 0.45
+# A fuzzy match may stretch over at most this many times the typed length (+2 chars),
+# so it stays inside about one word: "перерб" finds "переробити", while letters picked
+# from five different words of a long prompt do not count.
+max_spread = 1.5
+# 0.0 = rank purely by match quality; higher values favour more recent sessions.
+recency_weight = 0.15
+# Text indexed per session (prompts beyond this keep only the first and the latest).
+max_indexed_chars = 40000
+# Characters kept of a single prompt (huge pastes are cut).
+max_prompt_chars = 4000
+# Search syntax (fzf style): words are ANDed, 'exact  ^prefix  suffix$  !exclude.
+
+[theme]
+# Colors: "#rrggbb", a name ("red", "lightblue", "darkgray", ...), a 0-255 index,
+# or "" / "reset" for the terminal default.
+selected_bg = "#2c313c"
+selected_fg = ""
+match_fg = "#ffd75f"
+date_fg = "#7f8796"
+folder_fg = "#61afef"
+title_fg = ""
+headless_fg = "#7f8796"
+border_fg = "#4b5263"
+query_fg = "#e5c07b"
+prompt_symbol = "❯ "
+help_fg = "#7f8796"
+
+[keys]
+# Each action takes a list of keys. Letters and digits always go into the search,
+# so actions use special keys or Ctrl/Alt combinations.
+# Names: up down left right home end pageup pagedown enter esc tab backtab backspace
+# delete insert f1..f12, a single character, and modifiers ctrl- alt- shift-.
+up = ["up", "ctrl-p"]
+down = ["down", "ctrl-n"]
+page_up = ["pageup"]
+page_down = ["pagedown"]
+first = ["ctrl-home"]
+last = ["ctrl-end"]
+resume = ["enter"]
+# Print the resume command instead of running it.
+print_command = ["ctrl-o", "f4"]
+quit = ["esc", "ctrl-c", "ctrl-q"]
+clear_query = ["ctrl-u"]
+delete_word = ["ctrl-w", "ctrl-backspace", "alt-backspace"]
+toggle_preview = ["ctrl-t", "f2"]
+# Show / hide non-interactive sessions for this run.
+toggle_headless = ["ctrl-a", "f3"]
+# Cycle through: all sources -> each source alone.
+next_source = ["tab"]
+prev_source = ["backtab"]
+# Re-read every session file, ignoring the cache.
+reindex = ["ctrl-r", "f5"]
+cursor_left = ["left"]
+cursor_right = ["right"]
+cursor_home = ["home"]
+cursor_end = ["end"]
+
+[linux]
+# Applies to Linux and macOS. On every start chs makes sure `chs` can be called
+# from any shell by linking the running binary into link_dir. false = remove that
+# link again (only if it points to this binary).
+add_to_path = true
+link_dir = "/usr/local/bin"
+# Use `sudo -n` (never asks for a password) when link_dir is not writable.
+use_sudo = true
+# Used when link_dir can not be written even with sudo.
+fallback_dir = "~/.local/bin"
+
+[windows]
+# On every start chs.exe / chs-tray.exe sync these with the system, so turning an
+# option off here removes what it added.
+# Add the folder with chs.exe to the user PATH (HKCU\Environment).
+add_to_path = true
+# Allow the tray icon at all. false = chs-tray.exe exits right away.
+tray_enabled = true
+# Start the tray with Windows (HKCU\...\CurrentVersion\Run). Always uses the full path.
+tray_autostart = true
+# Running chs.exe also starts the tray if it is not running yet.
+start_tray_with_cli = true
+# Terminal the tray opens chs in:
+#   "auto"    - the Windows default terminal (Windows Terminal or the classic console)
+#   "wt"      - Windows Terminal, new window
+#   "conhost" - the classic console window
+#   "custom"  - terminal_command below; {chs} is replaced by the full path to chs.exe
+terminal = "auto"
+terminal_command = ["wt.exe", "-w", "0", "new-tab", "--title", "chs", "{chs}"]
+tray_tooltip = "chs - AI session history"
+# What a left click on the tray icon does: "open" (open chs) or "menu".
+tray_left_click = "open"
+# Program used by the tray's "Edit config".
+editor = "notepad.exe"
+
+# ---------------------------------------------------------------------------------
+# Session sources. Listed in this order in the source filter (Tab).
+# A source whose folder does not exist is skipped silently.
+#
+#   name             label shown in the list (keep it short)
+#   format           "claude" (Claude Code JSONL) or "codex" (Codex rollouts)
+#   path             the tool's config folder (the one holding projects/ or sessions/)
+#   color            color of the label
+#   enabled          false = ignore this source
+#   include_headless show sessions started non-interactively (claude -p / SDK, codex exec,
+#                    subagents). Ctrl+A toggles them for one run.
+#   headless_markers values of `entrypoint` (claude) or `source` (codex) that count as
+#                    non-interactive. Leave out for the defaults.
+#   resume_command   program and arguments; {id} = session id, {cwd} = its folder,
+#                    {file} = the session file. Runs inside the session's folder.
+# ---------------------------------------------------------------------------------
+
+[[sources]]
+name = "claude"
+format = "claude"
+path = "~/.claude"
+color = "#D97757"
+enabled = true
+include_headless = false
+resume_command = ["claude", "--resume", "{id}"]
+
+[[sources]]
+name = "claudellm"
+format = "claude"
+path = "~/.claudellm"
+color = "#C678DD"
+enabled = true
+include_headless = false
+resume_command = ["claudellm", "--resume", "{id}"]
+
+[[sources]]
+name = "codex"
+format = "codex"
+path = "~/.codex"
+color = "#10A37F"
+enabled = true
+include_headless = false
+resume_command = ["codex", "resume", "{id}"]

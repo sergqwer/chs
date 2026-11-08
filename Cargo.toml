@@ -1,0 +1,57 @@
+[package]
+name = "chs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Browse, fuzzy-search and resume your recent Claude Code, Codex and claudellm sessions"
+license = "MIT"
+repository = "https://github.com/sergqwer/chs"
+readme = "README.md"
+keywords = ["claude", "codex", "tui", "history", "fuzzy"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "chs"
+path = "src/main.rs"
+
+[[bin]]
+name = "chs-tray"
+path = "src/bin/chs-tray.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+dirs = "7"
+memchr = "2"
+nucleo-matcher = "0.3"
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+unicode-width = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.26"
+which = "8"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[build-dependencies]
+embed-resource = "3"

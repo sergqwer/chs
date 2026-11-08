@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: chs-linux-x86_64.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            archive: chs-linux-aarch64.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: chs-macos-aarch64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: chs-windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir dist
+          cp target/${{ matrix.target }}/release/chs dist/
+          cp README.md LICENSE config.default.toml dist/
+          tar -C dist -czf ${{ matrix.archive }} .
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/chs.exe, target/${{ matrix.target }}/release/chs-tray.exe dist/
+          Copy-Item README.md, LICENSE, config.default.toml dist/
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
