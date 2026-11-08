@@ -22,8 +22,9 @@ terminal AI agent sessions - <b>Claude Code</b>, <b>Codex</b>, <b>Gemini CLI</b>
 - **One list for every agent.** [28 tools](#supported-tools) out of the box, found wherever they keep their
   history - plus any extra Claude Code / Codex home (claudellm, work/personal profiles…). Each source has
   its own color; tools you do not use cost nothing.
-- **Just type.** The 20 most recent sessions show at once; any letter you type searches the 200 most
+- **Just type.** The 100 most recent sessions show at once; any letter you type searches the 200 most
   recent, fuzzy and typo-tolerant, in titles, folders and every prompt you wrote. The 20 best matches win.
+  All three numbers are set in `[general]`: `recent_count`, `search_pool`, `result_count`.
 - **Enter resumes** the session in its own folder (`claude --resume <id>`, `codex resume <id>`, …).
 - **No daemon.** An incremental on-disk index makes a start cost one `stat` per file (≈10 ms, ≈12 MB),
   and on Linux/macOS chs *replaces itself* with the resumed session, so it holds no memory while you work.

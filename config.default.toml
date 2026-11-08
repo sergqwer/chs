@@ -13,8 +13,8 @@
 # using a variable that is not set is skipped - so one list covers every OS.
 
 [general]
-# Sessions shown before you type anything.
-recent_count = 20
+# Sessions shown before you type anything (at most `search_pool`).
+recent_count = 100
 # How many of the most recent sessions the search looks through.
 search_pool = 200
 # How many best matches are shown while searching.

@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn template_parses() {
         let c = Config::from_user_str("").unwrap();
-        assert_eq!(c.general.recent_count, 20);
+        assert_eq!(c.general.recent_count, 100);
         assert_eq!(c.general.search_pool, 200);
         assert!(c.sources.len() >= 4);
     }
