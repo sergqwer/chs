@@ -1,9 +1,11 @@
 name: ci
 
+# Not on every push: the release workflow runs this before it builds, so a tag is
+# only published once the tests pass. Pull requests and a manual run still work.
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
