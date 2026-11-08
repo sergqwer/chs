@@ -26,6 +26,9 @@ terminal AI agent sessions - <b>Claude Code</b>, <b>Codex</b>, <b>Gemini CLI</b>
   recent, fuzzy and typo-tolerant, in titles, folders and every prompt you wrote. The 20 best matches win.
   All three numbers are set in `[general]`: `recent_count`, `search_pool`, `result_count`.
 - **Enter resumes** the session in its own folder (`claude --resume <id>`, `codex resume <id>`, …).
+- **Deleted folder?** It is marked `✗` in red. Enter makes it again, empty, at the same path, so the tool
+  still finds the session (Claude Code files sessions under the folder they were started in). Set
+  `missing_cwd` to `home`, `current` or `abort` for the other behaviours.
 - **No daemon.** An incremental on-disk index makes a start cost one `stat` per file (≈10 ms, ≈12 MB),
   and on Linux/macOS chs *replaces itself* with the resumed session, so it holds no memory while you work.
 - **Windows tray** (optional), PATH registration and autostart, all switchable in the config.

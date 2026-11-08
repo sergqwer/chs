@@ -46,6 +46,8 @@ strings! {
     best_match = "match";
     resume_with = "resume";
     headless_label = "non-interactive";
+    folder_missing = "no longer exists";
+    folder_missing_recreate = "no longer exists - resuming makes it again";
     more_prompts = "… {n} more …";
     // --- relative dates ---
     just_now = "now";
@@ -55,6 +57,8 @@ strings! {
     // --- messages ---
     cwd_missing = "Folder {cwd} no longer exists, resuming from {fallback}.";
     cwd_missing_abort = "Folder {cwd} no longer exists.";
+    cwd_recreated = "Folder {cwd} no longer existed - made it again (empty) to resume there.";
+    cwd_recreate_failed = "Could not make {cwd} again ({err}), resuming from {fallback}.";
     launch_failed = "Could not start {cmd}: {err}";
     linked = "chs: linked {link} -> {target}";
     unlinked = "chs: removed {link}";

@@ -55,6 +55,9 @@ pub struct Session {
     /// Index of the source in `Config::sources`, set on every load.
     #[serde(skip)]
     pub src: usize,
+    /// `cwd` is set but no longer a folder; checked on every load.
+    #[serde(skip)]
+    pub cwd_missing: bool,
     /// `prompts` as the matcher reads them, made by the first search that reaches
     /// this session. Lives with the prompts, so a reloaded list starts without it.
     #[serde(skip)]

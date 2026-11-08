@@ -66,6 +66,7 @@ struct Theme {
     folder: Style,
     title: Style,
     headless: Style,
+    missing: Style,
     border: Style,
     query: Style,
     help: Style,
@@ -102,6 +103,7 @@ impl Theme {
             folder: fg(&th.folder_fg),
             title: fg(&th.title_fg),
             headless: fg(&th.headless_fg),
+            missing: fg(&th.missing_fg),
             border: fg(&th.border_fg),
             query: fg(&th.query_fg),
             help: fg(&th.help_fg),
@@ -489,7 +491,8 @@ impl<'a> App<'a> {
                     }
                     Column::Folder => {
                         let w = (d.folder_width as usize).min(avail);
-                        spans.push(Span::styled(pad(&fit(&folder(&s.cwd, d.folder_style), w), w), self.theme.folder));
+                        let style = if s.cwd_missing { self.theme.missing } else { self.theme.folder };
+                        spans.push(Span::styled(pad(&fit(&folder_label(self.cfg, s), w), w), style));
                         used += w;
                     }
                     Column::Title => {
@@ -569,11 +572,23 @@ impl<'a> App<'a> {
         lines.push(Line::from(head));
         lines.push(Line::from(Span::styled(self.titles[si].clone(), Style::default().add_modifier(Modifier::BOLD))));
         lines.push(Line::default());
-        let mut folder_line = vec![label(&t.folder), Span::styled(s.cwd.clone(), th.folder)];
+        let folder_style = if s.cwd_missing { th.missing.add_modifier(Modifier::CROSSED_OUT) } else { th.folder };
+        let mut folder_line = vec![label(&t.folder), Span::styled(s.cwd.clone(), folder_style)];
         if let Some(b) = &s.branch {
             folder_line.push(Span::styled(format!("  ({} {b})", t.branch), th.help));
         }
         lines.push(Line::from(folder_line));
+        if s.cwd_missing {
+            // Under the path, lined up with it.
+            let note = match self.cfg.general.missing_cwd {
+                crate::config::MissingCwd::Recreate => &t.folder_missing_recreate,
+                _ => &t.folder_missing,
+            };
+            let tag =
+                if d.missing_folder_tag.is_empty() { String::new() } else { format!("{} ", d.missing_folder_tag) };
+            let indent = " ".repeat(t.folder.width() + 2);
+            lines.push(Line::from(Span::styled(format!("{indent}{tag}{note}"), th.missing)));
+        }
         if s.started_ms > 0 {
             lines.push(Line::from(vec![label(&t.started), Span::raw(format_ts(s.started_ms, &d.date_format))]));
         }
@@ -628,6 +643,18 @@ impl<'a> App<'a> {
         }
         let block = self.block().title(Span::styled(format!(" {} ", t.preview_title), th.help));
         f.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).block(block), area);
+    }
+}
+
+/// The folder column: the folder as `folder_style` shows it, behind the "no longer
+/// exists" tag when it is gone.
+pub fn folder_label(cfg: &Config, s: &Session) -> String {
+    let name = folder(&s.cwd, cfg.display.folder_style);
+    let tag = &cfg.display.missing_folder_tag;
+    if s.cwd_missing && !tag.is_empty() {
+        format!("{tag} {name}")
+    } else {
+        name
     }
 }
 

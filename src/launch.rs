@@ -14,6 +14,9 @@ pub struct Launch {
     pub cwd: PathBuf,
     /// Shown before starting, e.g. that the folder is gone.
     pub note: Option<String>,
+    /// `cwd` is gone and is made again by `make_cwd`, just before the start: showing
+    /// the command (preview, `--list --json`) must not touch the disk.
+    pub create: bool,
 }
 
 pub fn prepare(cfg: &Config, t: &Strings, s: &Session) -> Result<Launch> {
@@ -23,29 +26,55 @@ pub fn prepare(cfg: &Config, t: &Strings, s: &Session) -> Result<Launch> {
         .iter()
         .map(|a| a.replace("{id}", &s.id).replace("{cwd}", &s.cwd).replace("{file}", &s.file.to_string_lossy()))
         .collect();
-    let mut note = None;
-    let cwd = if !s.cwd.is_empty() && Path::new(&s.cwd).is_dir() {
-        PathBuf::from(&s.cwd)
-    } else {
-        let fallback = match cfg.general.missing_cwd {
-            MissingCwd::Home => dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
-            MissingCwd::Current => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            MissingCwd::Abort => return Err(anyhow!(fill(&t.cwd_missing_abort, &[("cwd", &s.cwd)]))),
-        };
-        note = Some(fill(&t.cwd_missing, &[("cwd", &s.cwd), ("fallback", &fallback.to_string_lossy())]));
-        fallback
+    let path = Path::new(&s.cwd);
+    if !s.cwd.is_empty() && path.is_dir() {
+        return Ok(Launch { argv, cwd: path.to_path_buf(), note: None, create: false });
+    }
+    let mode = cfg.general.missing_cwd;
+    // Only a path that is absolute on this OS: "/home/u/x" on Windows would land in C:\.
+    if mode == MissingCwd::Recreate && path.is_absolute() {
+        let note = Some(fill(&t.cwd_recreated, &[("cwd", &s.cwd)]));
+        return Ok(Launch { argv, cwd: path.to_path_buf(), note, create: true });
+    }
+    let fallback = match mode {
+        MissingCwd::Recreate | MissingCwd::Home => home(),
+        MissingCwd::Current => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        MissingCwd::Abort => return Err(anyhow!(fill(&t.cwd_missing_abort, &[("cwd", &s.cwd)]))),
     };
-    Ok(Launch { argv, cwd, note })
+    let note = Some(fill(&t.cwd_missing, &[("cwd", &s.cwd), ("fallback", &fallback.to_string_lossy())]));
+    Ok(Launch { argv, cwd: fallback, note, create: false })
+}
+
+fn home() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Make the gone folder again (with its parents) when `prepare` asked for it; if that
+/// fails, resume from the home folder instead.
+pub fn make_cwd(l: &mut Launch, t: &Strings) {
+    if !std::mem::take(&mut l.create) {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&l.cwd) {
+        let fallback = home();
+        l.note = Some(fill(
+            &t.cwd_recreate_failed,
+            &[("cwd", &l.cwd.to_string_lossy()), ("err", &e.to_string()), ("fallback", &fallback.to_string_lossy())],
+        ));
+        l.cwd = fallback;
+    }
 }
 
 /// A copy-pasteable command line.
 pub fn display(l: &Launch) -> String {
     let args = l.argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ");
-    if cfg!(windows) {
-        // pushd changes drive too and exists in cmd and PowerShell alike.
-        format!("pushd {} && {}", quote(&l.cwd.to_string_lossy()), args)
+    let dir = quote(&l.cwd.to_string_lossy());
+    // mkdir makes the parents too in cmd and PowerShell; pushd changes drive as well.
+    let (mkdir, cd) = if cfg!(windows) { ("mkdir", "pushd") } else { ("mkdir -p", "cd") };
+    if l.create {
+        format!("{mkdir} {dir} && {cd} {dir} && {args}")
     } else {
-        format!("cd {} && {}", quote(&l.cwd.to_string_lossy()), args)
+        format!("{cd} {dir} && {args}")
     }
 }
 
@@ -175,12 +204,41 @@ mod tests {
         };
         let l = prepare(&cfg, &t, &s).unwrap();
         assert_eq!(l.argv, vec!["codex", "resume", "01a1-x"]);
-        assert!(l.note.is_some(), "missing folder falls back to home");
+        assert!(l.note.is_some(), "a missing folder is announced");
         assert!(display(&l).ends_with("codex resume 01a1-x"));
         assert_eq!(quote("a b'c"), if cfg!(windows) { "\"a b'c\"" } else { "'a b'\\''c'" });
         if cfg!(unix) {
             assert_eq!(quote("/tmp/a\\b"), "'/tmp/a\\b'");
             assert_eq!(quote("~/x"), "'~/x'");
         }
+    }
+
+    #[test]
+    fn gone_folder_is_made_again_only_on_resume() {
+        let cfg = Config::default_config();
+        let t = Strings::default();
+        let root = std::env::temp_dir().join(format!("chs-launch-{}", std::process::id()));
+        let gone = root.join("deleted/project");
+        let s = Session {
+            source: "claude".into(),
+            id: "s1".into(),
+            cwd: gone.to_string_lossy().into(),
+            ..Default::default()
+        };
+        let mut l = prepare(&cfg, &t, &s).unwrap();
+        assert!(l.create && l.cwd == gone, "same path, made later");
+        assert!(display(&l).starts_with(if cfg!(windows) { "mkdir " } else { "mkdir -p " }));
+        assert!(!gone.exists(), "preparing (preview, --json) does not touch the disk");
+        make_cwd(&mut l, &t);
+        assert!(gone.is_dir() && !l.create);
+        let again = prepare(&cfg, &t, &s).unwrap();
+        assert!(!again.create && again.note.is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // Not absolute here (a path from the other OS): never made, home instead.
+        let foreign = if cfg!(windows) { "/home/u/proj" } else { "C:\\Users\\u\\proj" };
+        let s = Session { cwd: foreign.into(), ..s };
+        let l = prepare(&cfg, &t, &s).unwrap();
+        assert!(!l.create && l.cwd == home());
     }
 }

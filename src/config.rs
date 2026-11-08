@@ -48,6 +48,8 @@ pub enum AfterResume {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MissingCwd {
+    /// Make the folder again, empty, at the same path.
+    Recreate,
     Home,
     Current,
     Abort,
@@ -64,6 +66,7 @@ pub struct Display {
     pub source_width: u16,
     pub show_headless_tag: bool,
     pub headless_tag: String,
+    pub missing_folder_tag: String,
     pub highlight_symbol: String,
     pub border: Border,
     pub preview: bool,
@@ -145,6 +148,7 @@ pub struct Theme {
     pub folder_fg: String,
     pub title_fg: String,
     pub headless_fg: String,
+    pub missing_fg: String,
     pub border_fg: String,
     pub query_fg: String,
     pub prompt_symbol: String,

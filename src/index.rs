@@ -97,6 +97,14 @@ pub struct Loaded {
     pub titles: Vec<String>,
 }
 
+/// Flag sessions whose folder is gone: one stat per distinct folder.
+fn mark_missing_folders(sessions: &mut [Session]) {
+    let mut seen: HashMap<String, bool> = HashMap::new();
+    for s in sessions.iter_mut().filter(|s| !s.cwd.is_empty()) {
+        s.cwd_missing = !*seen.entry(s.cwd.clone()).or_insert_with(|| Path::new(&s.cwd).is_dir());
+    }
+}
+
 /// Indices of the sessions a list starts from (the TUI and `chs -l` alike): one
 /// source or all of them, headless ones only when asked for (or when their source
 /// always shows them), at most `search_pool`, newest first.
@@ -229,6 +237,7 @@ pub fn load(cfg: &Config, ignore_cache: bool) -> Result<Loaded> {
         // A cache that can not be written only costs speed next time.
         let _ = write_cache(&cache_path, &file);
     }
+    mark_missing_folders(&mut acc.sessions);
     let titles = acc.sessions.iter().map(Session::title).collect();
     Ok(Loaded { sessions: acc.sessions, titles })
 }
@@ -545,6 +554,16 @@ mod tests {
 
     fn cached(cfg: &Config) -> CacheFile {
         read_cache(&cfg.cache_dir().join("index.json"), &cfg.limits())
+    }
+
+    #[test]
+    fn gone_folders_are_marked() {
+        let dir = crate::sources::common::testing::TempDir::new("gone");
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = |p: &Path| Session { cwd: p.to_string_lossy().into(), ..Default::default() };
+        let mut v = vec![at(&dir), at(&dir.join("deleted")), Session::default(), at(&dir.join("deleted"))];
+        mark_missing_folders(&mut v);
+        assert_eq!(v.iter().map(|s| s.cwd_missing).collect::<Vec<_>>(), [false, true, false, true]);
     }
 
     #[test]

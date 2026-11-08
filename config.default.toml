@@ -31,9 +31,15 @@ cache_dir = ""
 #              is gone (on Linux/macOS the chs process is replaced, it keeps no memory).
 #   "return" - when the resumed session ends, you come back to the chs list.
 after_resume = "exit"
-# The session's folder no longer exists: "home" (resume from your home folder),
-# "current" (from the folder chs was started in) or "abort" (show an error).
-missing_cwd = "home"
+# The session's folder no longer exists:
+#   "recreate" - make it again, empty, at the same path and resume there: tools that
+#                file sessions under their folder (Claude Code, Codex...) still find
+#                it. A path that is not absolute here, or can not be made, falls back
+#                to "home".
+#   "home"     - resume from your home folder,
+#   "current"  - from the folder chs was started in,
+#   "abort"    - show an error.
+missing_cwd = "recreate"
 # Esc first clears the search; a second Esc quits. false = Esc always quits.
 esc_clears_query = true
 # true: your [[sources]] are merged into the built-in list by name (see the end of
@@ -54,6 +60,8 @@ source_width = 9
 # Mark sessions that were run non-interactively (claude -p, codex exec, ...).
 show_headless_tag = true
 headless_tag = "⚙"
+# In front of a folder that no longer exists; "" shows only the color.
+missing_folder_tag = "✗"
 # Symbol in front of the selected row.
 highlight_symbol = "▶ "
 # Frame style: "rounded", "plain", "double", "thick", "none".
@@ -110,6 +118,7 @@ date_fg = "#7f8796"
 folder_fg = "#61afef"
 title_fg = ""
 headless_fg = "#7f8796"
+missing_fg = "#e06c75"
 border_fg = "#4b5263"
 query_fg = "#e5c07b"
 prompt_symbol = "❯ "

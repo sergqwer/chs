@@ -123,7 +123,8 @@ fn real_main() -> Result<()> {
                 return Ok(());
             }
             tui::Outcome::Resume(s) => {
-                let l = launch::prepare(&cfg, &t, &s)?;
+                let mut l = launch::prepare(&cfg, &t, &s)?;
+                launch::make_cwd(&mut l, &t);
                 if let Some(n) = &l.note {
                     eprintln!("chs: {n}");
                 }
@@ -176,7 +177,7 @@ fn list(cfg: &Config, cli: &Cli, query: &str) -> Result<()> {
                 let s = pool[i];
                 let resume = launch::prepare(cfg, &t, s).map(|l| launch::display(&l)).unwrap_or_default();
                 serde_json::json!({
-                    "source": s.source, "id": s.id, "title": titles[i], "cwd": s.cwd,
+                    "source": s.source, "id": s.id, "title": titles[i], "cwd": s.cwd, "cwd_missing": s.cwd_missing,
                     "updated": tui::format_ts(s.updated_ms, "%Y-%m-%dT%H:%M:%S%:z"),
                     "headless": s.headless, "prompts": s.prompt_count,
                     "file": s.file, "resume": resume,
@@ -196,13 +197,18 @@ fn list(cfg: &Config, cli: &Cli, query: &str) -> Result<()> {
             Some(fg) => format!("\x1b[1;{fg}m{src}\x1b[0m"),
             None => src,
         };
-        let folder = tui::fit(&tui::folder(&s.cwd, d.folder_style), d.folder_width as usize);
+        let fw = d.folder_width as usize;
+        let folder = format!("{:<fw$}", tui::fit(&tui::folder_label(cfg, s), fw));
+        // Colored after padding: escape codes would count as width.
+        let folder = match tui::color(&cfg.theme.missing_fg).and_then(ansi_fg).filter(|_| color && s.cwd_missing) {
+            Some(fg) => format!("\x1b[{fg}m{folder}\x1b[0m"),
+            None => folder,
+        };
         println!(
-            "{src} {}  {folder:<fw$}  {}{}",
+            "{src} {}  {folder}  {}{}",
             tui::format_ts(s.updated_ms, &d.date_format),
             if s.headless { format!("{} ", d.headless_tag) } else { String::new() },
             tui::fit(titles[i], 160),
-            fw = d.folder_width as usize
         );
     }
     Ok(())
