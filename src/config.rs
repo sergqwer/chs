@@ -220,6 +220,18 @@ pub enum Format {
     Claude,
     Codex,
     Opencode,
+    Crush,
+    Goose,
+}
+
+/// One folder or several candidates; every one that exists is read. Candidates
+/// using an environment variable that is not set are skipped, so one list can cover
+/// Linux, macOS and Windows locations and the tools' own override variables.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Paths {
+    One(String),
+    Many(Vec<String>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -227,7 +239,7 @@ pub enum Format {
 pub struct SourceConfig {
     pub name: String,
     pub format: Format,
-    pub path: String,
+    pub path: Paths,
     #[serde(default = "default_color")]
     pub color: String,
     #[serde(default = "yes")]
@@ -258,13 +270,28 @@ impl SourceConfig {
             Format::Claude => vec!["sdk-cli".into(), "sdk-ts".into(), "sdk-py".into()],
             // `exec` is `codex exec`; `subagent` is what a JSON-object source maps to.
             Format::Codex => vec!["exec".into(), "subagent".into(), "mcp".into()],
-            // Child sessions spawned by OpenCode's task tool.
-            Format::Opencode => vec!["subagent".into()],
+            // Child sessions spawned by a task/subagent tool.
+            Format::Opencode | Format::Crush => vec!["subagent".into()],
+            // Goose's session_type: only "user" (and the "terminal" integration) is a
+            // conversation you had; the rest is scheduled, spawned or other clients.
+            Format::Goose => {
+                vec!["scheduled".into(), "sub_agent".into(), "hidden".into(), "gateway".into(), "acp".into()]
+            }
         }
     }
 
-    pub fn root(&self) -> PathBuf {
-        expand_path(&self.path)
+    /// Existing folders among `path`, without duplicates.
+    pub fn roots(&self) -> Vec<PathBuf> {
+        let list = match &self.path {
+            Paths::One(p) => std::slice::from_ref(p).to_vec(),
+            Paths::Many(v) => v.clone(),
+        };
+        let mut seen = std::collections::HashSet::new();
+        list.iter()
+            .filter_map(|p| try_expand_path(p))
+            .filter(|p| p.is_dir())
+            .filter(|p| seen.insert(p.canonicalize().unwrap_or_else(|_| p.clone())))
+            .collect()
     }
 }
 
@@ -405,9 +432,23 @@ pub fn set_bool(text: &str, section: &str, key: &str, value: bool) -> String {
     out
 }
 
-/// Expand `~`, `${VAR}` and `%VAR%`.
+/// Expand `~`, `${VAR}` and `%VAR%`; unset variables are left as written.
 pub fn expand_path(p: &str) -> PathBuf {
-    let p = expand_vars(p.trim());
+    expand_inner(p).0
+}
+
+/// Like [`expand_path`], but `None` when the path uses a variable that is not set.
+pub fn try_expand_path(p: &str) -> Option<PathBuf> {
+    let (path, complete) = expand_inner(p);
+    complete.then_some(path)
+}
+
+fn expand_inner(p: &str) -> (PathBuf, bool) {
+    let (p, complete) = expand_vars(p.trim());
+    (expand_tilde(&p), complete)
+}
+
+fn expand_tilde(p: &str) -> PathBuf {
     if p == "~" {
         return dirs::home_dir().unwrap_or_default();
     }
@@ -417,7 +458,9 @@ pub fn expand_path(p: &str) -> PathBuf {
     PathBuf::from(p)
 }
 
-fn expand_vars(s: &str) -> String {
+/// Returns the expanded text and whether every variable was set (and non-empty).
+fn expand_vars(s: &str) -> (String, bool) {
+    let mut complete = true;
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     loop {
@@ -445,13 +488,17 @@ fn expand_vars(s: &str) -> String {
                 _ => (None, 1),
             }
         };
-        match name.and_then(|n| std::env::var(n).ok().map(|v| (n, v))) {
-            Some((_, v)) => out.push_str(&v),
+        match name.map(|n| std::env::var(n).ok().filter(|v| !v.is_empty())) {
+            Some(Some(v)) => out.push_str(&v),
+            Some(None) => {
+                complete = false;
+                out.push_str(&tail[..consumed]);
+            }
             None => out.push_str(&tail[..consumed]),
         }
         rest = &tail[consumed..];
     }
-    out
+    (out, complete)
 }
 
 #[cfg(test)]
@@ -510,9 +557,11 @@ mod tests {
     #[test]
     fn vars_expand() {
         std::env::set_var("CHS_TEST_VAR", "abc");
-        assert_eq!(expand_vars("${CHS_TEST_VAR}/x"), "abc/x");
-        assert_eq!(expand_vars("%CHS_TEST_VAR%\\x"), "abc\\x");
-        assert_eq!(expand_vars("100% sure"), "100% sure");
-        assert_eq!(expand_vars("${NOPE_NOT_SET_42}"), "${NOPE_NOT_SET_42}");
+        assert_eq!(expand_vars("${CHS_TEST_VAR}/x"), ("abc/x".into(), true));
+        assert_eq!(expand_vars("%CHS_TEST_VAR%\\x"), ("abc\\x".into(), true));
+        assert_eq!(expand_vars("100% sure"), ("100% sure".into(), true));
+        assert_eq!(expand_vars("${NOPE_NOT_SET_42}"), ("${NOPE_NOT_SET_42}".into(), false));
+        assert!(try_expand_path("${NOPE_NOT_SET_42}/goose").is_none());
+        assert!(try_expand_path("~/x").is_some());
     }
 }

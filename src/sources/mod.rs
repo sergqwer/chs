@@ -8,7 +8,10 @@
 
 pub mod claude;
 pub mod codex;
+pub mod crush;
+pub mod goose;
 pub mod opencode;
+mod sqlite;
 
 use crate::config::Format;
 use crate::session::{Limits, Session};
@@ -24,7 +27,7 @@ pub enum Storage {
 pub fn storage(format: Format) -> Storage {
     match format {
         Format::Claude | Format::Codex => Storage::Files { append_only: true },
-        Format::Opencode => Storage::Database,
+        Format::Opencode | Format::Crush | Format::Goose => Storage::Database,
     }
 }
 
@@ -32,7 +35,7 @@ pub fn list_files(format: Format, root: &Path) -> Vec<PathBuf> {
     match format {
         Format::Claude => claude::list_files(root),
         Format::Codex => codex::list_files(root),
-        Format::Opencode => Vec::new(),
+        Format::Opencode | Format::Crush | Format::Goose => Vec::new(),
     }
 }
 
@@ -40,7 +43,7 @@ pub fn parse(format: Format, reader: impl BufRead, s: &mut Session, lim: &Limits
     match format {
         Format::Claude => claude::parse(reader, s, lim),
         Format::Codex => codex::parse(reader, s, lim),
-        Format::Opencode => Ok(0),
+        Format::Opencode | Format::Crush | Format::Goose => Ok(0),
     }
 }
 
@@ -48,6 +51,8 @@ pub fn parse(format: Format, reader: impl BufRead, s: &mut Session, lim: &Limits
 pub fn load_database(format: Format, root: &Path, lim: &Limits, limit: usize) -> Vec<Session> {
     match format {
         Format::Opencode => opencode::load(root, lim, limit),
+        Format::Crush => crush::load(root, lim, limit),
+        Format::Goose => goose::load(root, lim, limit),
         Format::Claude | Format::Codex => Vec::new(),
     }
 }
@@ -78,6 +83,6 @@ fn id_from_file_stem(format: Format, stem: &str) -> String {
                 String::new()
             }
         }
-        Format::Opencode => String::new(),
+        Format::Opencode | Format::Crush | Format::Goose => String::new(),
     }
 }

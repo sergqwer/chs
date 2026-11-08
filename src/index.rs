@@ -65,7 +65,7 @@ pub fn load(cfg: &Config, ignore_cache: bool) -> Result<Loaded> {
         if !src.enabled || sources::storage(src.format) == Storage::Database {
             continue;
         }
-        for path in sources::list_files(src.format, &src.root()) {
+        for path in src.roots().iter().flat_map(|r| sources::list_files(src.format, r)) {
             let Ok(md) = std::fs::metadata(&path) else { continue };
             let mtime_ns = md
                 .modified()
@@ -127,7 +127,9 @@ pub fn load(cfg: &Config, ignore_cache: bool) -> Result<Loaded> {
         if !src.enabled || sources::storage(src.format) != Storage::Database {
             continue;
         }
-        for mut s in sources::load_database(src.format, &src.root(), &lim, pool * 3) {
+        let found =
+            src.roots().iter().flat_map(|r| sources::load_database(src.format, r, &lim, pool * 3)).collect::<Vec<_>>();
+        for mut s in found {
             if !s.is_useful() {
                 continue;
             }

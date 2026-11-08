@@ -8,7 +8,9 @@
 #   chs --init-config        rewrite it with defaults (add --force to overwrite)
 #   chs --dump-lang          print every UI string, as a starting point for a translation
 #
-# Paths accept `~` and environment variables written as ${VAR} or %VAR%.
+# Paths accept `~` and environment variables written as ${VAR} or %VAR%. A source's
+# `path` may also be a list: every folder of it that exists is read, and an entry
+# using a variable that is not set is skipped - so one list covers every OS.
 
 [general]
 # Sessions shown before you type anything.
@@ -182,7 +184,7 @@ editor = "notepad.exe"
 #   name             label shown in the list (keep it short)
 #   format           which tool wrote the sessions (the list below has one source of
 #                    every supported format): "claude", "codex", "opencode", ...
-#   path             the tool's data folder (see each source below)
+#   path             the tool's data folder, or a list of candidates (see each source)
 #   color            color of the label
 #   enabled          false = ignore this source
 #   include_headless show sessions started non-interactively (claude -p / SDK, codex exec,
@@ -214,7 +216,7 @@ resume_command = ["claudellm", "--resume", "{id}"]
 [[sources]]
 name = "codex"
 format = "codex"
-path = "~/.codex"
+path = ["${CODEX_HOME}", "~/.codex"]
 color = "#10A37F"
 enabled = true
 include_headless = false
@@ -224,8 +226,29 @@ resume_command = ["codex", "resume", "{id}"]
 [[sources]]
 name = "opencode"
 format = "opencode"
-path = "~/.local/share/opencode"
+path = ["${XDG_DATA_HOME}/opencode", "~/.local/share/opencode"]
 color = "#E5C07B"
 enabled = true
 include_headless = false
 resume_command = ["opencode", "--session", "{id}"]
+
+# Crush: a database per project (<project>/.crush/crush.db), found through the
+# projects.json in its global data folder.
+[[sources]]
+name = "crush"
+format = "crush"
+path = ["${CRUSH_GLOBAL_DATA}", "${XDG_DATA_HOME}/crush", "~/.local/share/crush", "%LOCALAPPDATA%/crush"]
+color = "#FF6EC7"
+enabled = true
+include_headless = false
+resume_command = ["crush", "--session", "{id}"]
+
+# Goose: sessions/sessions.db in its data folder.
+[[sources]]
+name = "goose"
+format = "goose"
+path = ["${GOOSE_PATH_ROOT}/data", "${XDG_DATA_HOME}/goose", "~/.local/share/goose", "%APPDATA%/Block/goose/data"]
+color = "#A0A0A0"
+enabled = true
+include_headless = false
+resume_command = ["goose", "session", "--resume", "--session-id", "{id}"]
