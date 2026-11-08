@@ -180,8 +180,9 @@ editor = "notepad.exe"
 # A source whose folder does not exist is skipped silently.
 #
 #   name             label shown in the list (keep it short)
-#   format           "claude" (Claude Code JSONL) or "codex" (Codex rollouts)
-#   path             the tool's config folder (the one holding projects/ or sessions/)
+#   format           which tool wrote the sessions (the list below has one source of
+#                    every supported format): "claude", "codex", "opencode", ...
+#   path             the tool's data folder (see each source below)
 #   color            color of the label
 #   enabled          false = ignore this source
 #   include_headless show sessions started non-interactively (claude -p / SDK, codex exec,
@@ -218,3 +219,13 @@ color = "#10A37F"
 enabled = true
 include_headless = false
 resume_command = ["codex", "resume", "{id}"]
+
+# OpenCode: one SQLite database, opencode.db, in this folder (same path on Windows).
+[[sources]]
+name = "opencode"
+format = "opencode"
+path = "~/.local/share/opencode"
+color = "#E5C07B"
+enabled = true
+include_headless = false
+resume_command = ["opencode", "--session", "{id}"]

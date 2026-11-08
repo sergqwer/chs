@@ -7,7 +7,7 @@
 
 use crate::config::{Config, Format};
 use crate::session::{Limits, Session};
-use crate::sources;
+use crate::sources::{self, Storage};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -62,7 +62,7 @@ pub fn load(cfg: &Config, ignore_cache: bool) -> Result<Loaded> {
 
     let mut cands = Vec::new();
     for (i, src) in cfg.sources.iter().enumerate() {
-        if !src.enabled {
+        if !src.enabled || sources::storage(src.format) == Storage::Database {
             continue;
         }
         for path in sources::list_files(src.format, &src.root()) {
@@ -121,6 +121,24 @@ pub fn load(cfg: &Config, ignore_cache: bool) -> Result<Loaded> {
         }
     }
 
+    // Database-backed sources answer "newest N" themselves; take enough rows that the
+    // headless ones (hidden by default) do not eat the visible pool.
+    for (i, src) in cfg.sources.iter().enumerate() {
+        if !src.enabled || sources::storage(src.format) != Storage::Database {
+            continue;
+        }
+        for mut s in sources::load_database(src.format, &src.root(), &lim, pool * 3) {
+            if !s.is_useful() {
+                continue;
+            }
+            s.source = src.name.clone();
+            s.headless = s.entry.as_ref().is_some_and(|e| markers[i].iter().any(|m| m == e));
+            sessions.push(s);
+        }
+    }
+    // Merge both kinds: newest first (stable, so equal times keep file order).
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.updated_ms));
+
     changed |= new_entries.len() != old.entries.len();
     if changed {
         let file = CacheFile {
@@ -171,8 +189,9 @@ fn refresh(c: &Candidate, old: Option<&Entry>, lim: &Limits) -> (Option<Entry>, 
         let head = hash_at(&mut f, 0, HASH_BYTES)?;
         // Continue from the old offset only for a pure append: the file grew, and both
         // its first bytes and the bytes up to where we stopped are what we saw before.
+        let append_only = matches!(sources::storage(c.format), Storage::Files { append_only: true });
         let appended = match old {
-            Some(e) if c.size > e.size && e.head == head && e.offset <= c.size => {
+            Some(e) if append_only && c.size > e.size && e.head == head && e.offset <= c.size => {
                 tail_hash(&mut f, e.offset)? == e.tail
             }
             _ => false,

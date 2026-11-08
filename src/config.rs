@@ -219,6 +219,7 @@ pub enum TrayClick {
 pub enum Format {
     Claude,
     Codex,
+    Opencode,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -257,6 +258,8 @@ impl SourceConfig {
             Format::Claude => vec!["sdk-cli".into(), "sdk-ts".into(), "sdk-py".into()],
             // `exec` is `codex exec`; `subagent` is what a JSON-object source maps to.
             Format::Codex => vec!["exec".into(), "subagent".into(), "mcp".into()],
+            // Child sessions spawned by OpenCode's task tool.
+            Format::Opencode => vec!["subagent".into()],
         }
     }
 
@@ -460,7 +463,7 @@ mod tests {
         let c = Config::from_user_str("").unwrap();
         assert_eq!(c.general.recent_count, 20);
         assert_eq!(c.general.search_pool, 200);
-        assert_eq!(c.sources.len(), 3);
+        assert!(c.sources.len() >= 4);
     }
 
     #[test]
